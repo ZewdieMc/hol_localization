@@ -21,7 +21,7 @@ class DeadReckoning:
         # ODOM PUBLISHER
         self.odom_pub = rospy.Publisher(odom_topic, Odometry, queue_size=10)
 
-        # JOINT STATE SUBSCRIBER
+        # JOINT STATE SUBSCRIBER #! Gives the wheel velocities
         self.joint_state_sub = rospy.Subscriber(joint_state_topic, JointState, self.joint_state_callback)
 
         # wheel joint names
@@ -52,26 +52,21 @@ class DeadReckoning:
 
 
     def joint_state_callback(self, data):
-        print("Joint state callback")
-        print("data: name: ", data.name[0])
         if data.name[0] == self.left_wheel_name:
-            print("Left wheel velocity arrived")
             self.left_vel = data.velocity[0]
             self.left_vel_arrived = True
+
         elif data.name[0] == self.right_wheel_name:
-            print("Right wheel velocity arrived")
             self.right_vel = data.velocity[0]
-            self.right_vel_arrived = True
             
-        if self.left_vel_arrived and self.right_vel_arrived:
-            self.compute_odometry()
+            if self.left_vel_arrived:
+                self.compute_odometry()
 
-            # Publish the predicted odometry to rviz
-            self.odom_path_pub()
+                # Publish the predicted odometry to rviz
+                self.odom_path_pub()
 
-            #! Reset the flags
-            self.left_vel_arrived = False
-            self.right_vel_arrived = False
+                #! Reset the flag
+                self.left_vel_arrived = False
 
     def compute_odometry(self):
         # Linear wheel velocities
@@ -104,9 +99,9 @@ class DeadReckoning:
 
         # Jacobian wrt noise
         Bk = np.array([
-                    [],
-                    [],
-                    []
+                    [... , ...],
+                    [... , ...],
+                    [... , ...],
         ])
 
 

@@ -1,0 +1,6 @@
+<launch>
+        <include file="$(find turtlebot_simulation)/launch/turtlebot_basic.launch" /> 
+        <node pkg="ho_localization" type="odometry_node.py" name="dead_reckoning" output="screen"/>
+        <node pkg="ho_localization" type="vel_adapter_node.py" name="steering_node" output="screen"/>
+
+</launch>
