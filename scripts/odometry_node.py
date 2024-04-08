@@ -126,8 +126,7 @@ class DeadReckoning:
         AxC = np.array([
             AxB[0,0] + BxC[0,0] * cos(theta) - BxC[1,0] * sin(theta),
             AxB[1,0] + BxC[0,0] * sin(theta) + BxC[1,0] * cos(theta),
-            wrap_angle(AxB[2,0] + BxC[2,0])
-
+            wrap_angle(theta + BxC[2,0])
         ])
         return AxC.reshape(-1,1)
 
