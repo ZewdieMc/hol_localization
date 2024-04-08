@@ -1,8 +1,6 @@
 #!/usr/bin/python3
 import rospy
-import math
 from std_msgs.msg import Float64MultiArray
-from sensor_msgs.msg import JointState
 from geometry_msgs.msg import Twist
 
 class CmdVelAdapter:

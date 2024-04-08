@@ -8,7 +8,6 @@ from numpy import cos, sin
 from tf.transformations import quaternion_from_euler
 import tf
 
-
 def wrap_angle(ang):
     if isinstance(ang, np.ndarray):
         ang[ang > np.pi] -= 2.0 * np.pi
@@ -21,19 +20,17 @@ class DeadReckoning:
         # ODOM PUBLISHER
         self.odom_pub = rospy.Publisher(odom_topic, Odometry, queue_size=10)
 
-        # JOINT STATE SUBSCRIBER #! Gives the wheel velocities
+        # JOINT STATE SUBSCRIBER #! Gives the wheel angular velocities
         self.joint_state_sub = rospy.Subscriber(joint_state_topic, JointState, self.joint_state_callback)
 
         # wheel joint names
         self.left_wheel_name = "turtlebot/kobuki/wheel_left_joint"
         self.right_wheel_name = "turtlebot/kobuki/wheel_right_joint"
 
-
-        self.Qw = np.array([[2**2, 0],
-                            [0, 2**2]])
-        
+        self.Qk = np.array([[2**2, 0],
+                            [0, 2**2]])        
         #robot pose and uncertainty
-        self.xk = np.array([[0], [0], [0]])
+        self.xk = np.array([0, 0, 0]).reshape(-1,1)
         self.Pk = np.eye(3)*0.1
 
         # wheel velocitiesWb
@@ -54,6 +51,8 @@ class DeadReckoning:
         self.left_vel_arrived = False
         self.right_vel_arrived = False
 
+        # odom measurement
+        self.uk = np.array([0, 0, 0]).reshape(-1,1)
 
     def joint_state_callback(self, data):
         if data.name[0] == self.left_wheel_name:
@@ -77,6 +76,7 @@ class DeadReckoning:
         vl = self.left_vel * self.Wr
         vr = self.right_vel * self.Wr
 
+        # Linear and angular velocities of the robot
         self.v = (vr + vl) / 2
         self.w = (vl - vr)/ self.Wb
 
@@ -86,63 +86,54 @@ class DeadReckoning:
         #update last time
         self.last_time = rospy.Time.now()
 
-        self.A = np.array([ #! not sure
-            [0.5*self.Wr*self.dt,           0.5*self.Wr*self.dt],
-            [0,                             0],
-            [(0.5 * self.Wr*self.dt)/self.Wb, -(0.5 * self.Wr*self.dt)/self.Wb],
-                
-                ])
-        Qk = self.A @ self.Qw @ np.transpose(self.A)
-
         #displacement
-        displacement = np.array([self.v * self.dt, 0, self.w * self.dt])
+        self.uk = np.array([self.v * self.dt, 0, self.w * self.dt]).reshape(-1,1)
 
         #predicted state
-        self.prediction(displacement, Qk)
+        self.prediction()
 
+    def prediction(self):
+        # local variables to make J2_o more readable
+        r = self.Wr
+        dt = self.dt
+        theta = float(self.xk[2,0])
 
-
-    def prediction(self, BxC, Qk):
-
-        # Calculate Jacobians with respect to state vector
-        #! J1_o = np.array([[1, 0, -sin(float(self.xk[2]))*(self.v)*self.dt],
-        #!               [0, 1, cos(float(self.xk[2]))*(self.v)*self.dt],
-        #!               [0, 0, 1]])
+        # Calculate Jacobians with respect to state vector#!(x, y, theta)
+        J1_o = np.array([
+                      [1, 0, -sin(theta) * self.uk[0, 0]],
+                      [0, 1,  cos(theta) * self.uk[0, 0] ],
+                      [0, 0, 1                                        ]
+                      ])
+ 
+        # Calculate Jacobians with respect to noise #!(vr, vl)
+        J2_o = np.array([
+                        [0.5 * r * cos(theta) * dt,    0.5 * r * cos(theta) * dt],
+                        [0.5 * r * sin(theta) * dt,    0.5 * r * sin(theta) * dt],
+                        [(r / self.Wb) * dt,           -(r / self.Wb) * dt      ]
+                        ])
         
-        J1_o = np.array([[1, 0, -BxC[0]*sin(float(self.xk[2]))],
-                      [0, 1, BxC[0]*cos(float(self.xk[2]))],
-                      [0, 0, 1]])
+        # pose update
+        self.xk = self.oplus()
 
-        # Calculate Jacobians with respect to noise
-        #! Wk = np.array([[0.5 * cos(float(self.xk[2]))*dt, 0.5 * cos(float(self.xk[2]))*dt],
-        #!               [0.5 * np.sin(float(self.xk[2]))*dt, 0.5 *
-        #!                sin(float(self.xk[2]))*dt],
-        #!                [-dt/self.Wb, dt/self.Wb]
-                       
-        #!                ])
-        J2_o = np.array([[cos(float(self.xk[2])),    -sin(float(self.xk[2])),   0.0],
-                       [sin(float(self.xk[2])),     cos(float(self.xk[2])),   0.0],
-                       [0.0,               0.0,             1.0]])
-        
-        # Integrate position
-        self.xk = self.oplus(self.xk, BxC)
+        # Prediction uncertainty
+        self.Pk = J1_o @ self.Pk @ J1_o.T + J2_o @ self.Qk @ J2_o.T
 
-        # Update the prediction "uncertainty"
-        self.Pk = J1_o @ self.Pk @ np.transpose(J1_o) + J2_o @ Qk @ np.transpose(J2_o)
+    def oplus(self):
+        AxB = self.xk
+        BxC = self.uk
+        theta = float(self.xk[2,0])
 
+        AxC = np.array([
+            AxB[0,0] + BxC[0,0] * cos(theta) - BxC[1,0] * sin(theta),
+            AxB[1,0] + BxC[0,0] * sin(theta) + BxC[1,0] * cos(theta),
+            wrap_angle(AxB[2,0] + BxC[2,0])
 
-
-
-
-    def oplus(self, AxB, BxC):
-        x = AxB[0] + BxC[0] * cos(AxB[2]) - BxC[1] * sin(AxB[2])
-        y = AxB[1] + BxC[0] * sin(AxB[2]) + BxC[1] * cos(AxB[2])
-        yaw = wrap_angle(AxB[2] + BxC[2])
-        return np.array([x, y, yaw])
+        ])
+        return AxC.reshape(-1,1)
 
     def odom_path_pub(self):
         # Transform theta from euler to quaternion
-        q = quaternion_from_euler(0, 0, float(self.xk[2]))
+        q = quaternion_from_euler(0, 0, float(wrap_angle(self.xk[2, 0])))
 
         # Publish predicted odom
         odom = Odometry()
@@ -170,7 +161,7 @@ class DeadReckoning:
 
         self.odom_pub.publish(odom)
 
-        tf.TransformBroadcaster().sendTransform((float(self.xk[0]), float(self.xk[1]), 0.0), q, rospy.Time.now(
+        tf.TransformBroadcaster().sendTransform((float(self.xk[0, 0]), float(self.xk[1, 0]), 0.0), q, rospy.Time.now(
         ), odom.child_frame_id, odom.header.frame_id)
 
 
