@@ -15,7 +15,7 @@ def wrap_angle(ang):
     else:
         return ang + (2.0 * np.pi * np.floor((np.pi - ang) / (2.0 * np.pi)))
 class DeadReckoning:
-    def __init__(self, joint_state_topic, odom_topic, Wb=0.23, Wr=0.035):
+    def __init__(self, joint_state_topic, odom_topic, Wb=0.235, Wr=0.035):
 
         # ODOM PUBLISHER
         self.odom_pub = rospy.Publisher(odom_topic, Odometry, queue_size=10)
@@ -27,8 +27,10 @@ class DeadReckoning:
         self.left_wheel_name = "turtlebot/kobuki/wheel_left_joint"
         self.right_wheel_name = "turtlebot/kobuki/wheel_right_joint"
 
-        self.Qk = np.array([[2**2, 0],
-                            [0, 2**2]])        
+
+        self.Qw = np.array([[20**2, 0],
+                            [0, 20**2]])
+        
         #robot pose and uncertainty
         self.xk = np.array([0, 0, 0]).reshape(-1,1)
         self.Pk = np.eye(3)*0.1
@@ -86,8 +88,30 @@ class DeadReckoning:
         #update last time
         self.last_time = rospy.Time.now()
 
+        self.A = np.array([ #! not sure
+            [0.5*self.Wr*self.dt,           0.5*self.Wr*self.dt],
+            [0.0005,                             0.0005],
+            [(0.5 * self.Wr*self.dt)/self.Wb, -(0.5 * self.Wr*self.dt)/self.Wb],
+                
+                ])
+        
+        r  = self.Wr
+        b = self.Wb
+        t = self.dt
+        dtheta = self.w * self.dt
+        d = self.v * self.dt
+        Aj = np.array([
+            [r*t/2 * cos(dtheta) - sin(dtheta)*r*t/b * d, r*t/2 * cos(dtheta) + sin(dtheta)*r*t/b * d],
+            [r*t/2 * sin(dtheta) + cos(dtheta)*r*t/b * d, r*t/2 * sin(dtheta) - cos(dtheta)*r*t/b * d],
+            [r*t/b, -r*t/b]
+
+        ])
+
+        Qk = Aj @ self.Qw @ np.transpose(Aj)
+        # Qk = np.eye(3)*0.2
+        print(Qk)
         #displacement
-        self.uk = np.array([self.v * self.dt, 0, self.w * self.dt]).reshape(-1,1)
+        displacement = np.array([d, 0, dtheta])
 
         #predicted state
         self.prediction()
