@@ -4,9 +4,10 @@ from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import Twist
 
 class CmdVelAdapter:
-    def __init__(self, wheel_base=0.23) :
+    def __init__(self, wheel_base=0.23,wheel_radius=0.035) :
          
         self.wheel_base = wheel_base
+        self.wheel_radius = wheel_radius
         # Joint state subscriber
         rospy.Subscriber("/cmd_vel", Twist, callback=self.cmd_vel_callback)
 
@@ -20,7 +21,7 @@ class CmdVelAdapter:
         left_wheel_vel = msg.linear.x + (msg.angular.z * self.wheel_base / 2)
         right_wheel_vel = msg.linear.x - (msg.angular.z * self.wheel_base / 2)
 
-        msgOut.data = [left_wheel_vel,right_wheel_vel]
+        msgOut.data = [left_wheel_vel/self.wheel_radius,right_wheel_vel/self.wheel_radius]
         self.vel_pub.publish(msgOut)
 
 if __name__ == '__main__':
