@@ -106,12 +106,19 @@ class DeadReckoning:
             [r*t/b, -r*t/b]
 
         ])
+        Aj = np.array([
+            [r*t/2 * cos(dtheta) - sin(dtheta)*r*t/b * d, r*t/2 * cos(dtheta) + sin(dtheta)*r*t/b * d],
+            [0.005, 0.005],
+            [r*t/b, -r*t/b]
 
-        Qk = Aj @ self.Qw @ np.transpose(Aj)
+        ])
+
+        self.Qk = Aj @ self.Qw @ np.transpose(Aj)
         # Qk = np.eye(3)*0.2
-        print(Qk)
         #displacement
-        displacement = np.array([d, 0, dtheta])
+        print(self.Qk)
+        displacement = np.array([d*cos(dtheta), d*sin(dtheta), dtheta])
+        self.uk = displacement.reshape(-1,1)
 
         #predicted state
         self.prediction()
@@ -130,11 +137,9 @@ class DeadReckoning:
                       ])
  
         # Calculate Jacobians with respect to noise #!(vr, vl)
-        J2_o = np.array([
-                        [0.5 * r * cos(theta) * dt,    0.5 * r * cos(theta) * dt],
-                        [0.5 * r * sin(theta) * dt,    0.5 * r * sin(theta) * dt],
-                        [(r / self.Wb) * dt,           -(r / self.Wb) * dt      ]
-                        ])
+        J2_o = np.array([[cos(float(self.xk[2])),    -sin(float(self.xk[2])),   0.0],
+                       [sin(float(self.xk[2])),     cos(float(self.xk[2])),   0.0],
+                       [0.0,               0.0,             1.0]])
         
         # pose update
         self.xk = self.oplus()
