@@ -28,14 +28,18 @@ class DeadReckoning:
         self.left_wheel_name = "turtlebot/kobuki/wheel_left_joint"
         self.right_wheel_name = "turtlebot/kobuki/wheel_right_joint"
 
+
+        self.Qw = np.array([[2**2, 0],
+                            [0, 2**2]])
+        
         #robot pose and uncertainty
         self.xk = np.array([[0], [0], [0]])
-        self.PK = np.eye(3)*0.1
+        self.Pk = np.eye(3)*0.1
 
         # wheel velocitiesWb
         self.left_vel = None
         self.right_vel = None
-        self.dt = None
+        self.dt = 0
 
         # Wheel base
         self.Wb = Wb
@@ -80,51 +84,63 @@ class DeadReckoning:
         self.dt = (rospy.Time.now() - self.last_time).to_sec()
         
         #update last time
-        self.last_time = rospy.Time.now() #! Note sure
+        self.last_time = rospy.Time.now()
 
-        # Compute the new pose(prediction)
-        #displacement
-        displacement = np.array([self.v * self.dt, 0, self.w * self.dt])
-
-        #predicted state
-        self.xk = self.oplus(self.xk, displacement)
-
-    def prediction(self):
-        # Jacobian wrt the state
-        Ak = np.array([
-                    [1.0, 0.0, ...],
-                    [0.0, 1.0, ...],
-                    [0.0, 0.0, 1.0],
-        ])
-
-        # Jacobian wrt noise
-        Bk = np.array([
-                    [... , ...],
-                    [... , ...],
-                    [... , ...],
-        ])
-
+        self.A = np.array([ #! not sure
+            [0.5*self.Wr*self.dt,           0.5*self.Wr*self.dt],
+            [0,                             0],
+            [(0.5 * self.Wr*self.dt)/self.Wb, -(0.5 * self.Wr*self.dt)/self.Wb],
+                
+                ])
+        Qk = self.A @ self.Qw @ np.transpose(self.A)
 
         #displacement
         displacement = np.array([self.v * self.dt, 0, self.w * self.dt])
 
         #predicted state
-        xk = self.oplus(self.xk, displacement)
+        self.prediction(displacement, Qk)
 
-        #predicted covariance
-        PK = None
 
-        return xk, PK
+
+    def prediction(self, BxC, Qk):
+
+        # Calculate Jacobians with respect to state vector
+        #! J1_o = np.array([[1, 0, -sin(float(self.xk[2]))*(self.v)*self.dt],
+        #!               [0, 1, cos(float(self.xk[2]))*(self.v)*self.dt],
+        #!               [0, 0, 1]])
+        
+        J1_o = np.array([[1, 0, -BxC[0]*sin(float(self.xk[2]))],
+                      [0, 1, BxC[0]*cos(float(self.xk[2]))],
+                      [0, 0, 1]])
+
+        # Calculate Jacobians with respect to noise
+        #! Wk = np.array([[0.5 * cos(float(self.xk[2]))*dt, 0.5 * cos(float(self.xk[2]))*dt],
+        #!               [0.5 * np.sin(float(self.xk[2]))*dt, 0.5 *
+        #!                sin(float(self.xk[2]))*dt],
+        #!                [-dt/self.Wb, dt/self.Wb]
+                       
+        #!                ])
+        J2_o = np.array([[cos(float(self.xk[2])),    -sin(float(self.xk[2])),   0.0],
+                       [sin(float(self.xk[2])),     cos(float(self.xk[2])),   0.0],
+                       [0.0,               0.0,             1.0]])
+        
+        # Integrate position
+        self.xk = self.oplus(self.xk, BxC)
+
+        # Update the prediction "uncertainty"
+        self.Pk = J1_o @ self.Pk @ np.transpose(J1_o) + J2_o @ Qk @ np.transpose(J2_o)
+
+
+
 
 
     def oplus(self, AxB, BxC):
         x = AxB[0] + BxC[0] * cos(AxB[2]) - BxC[1] * sin(AxB[2])
         y = AxB[1] + BxC[0] * sin(AxB[2]) + BxC[1] * cos(AxB[2])
-        yaw = AxB[2] + BxC[2]
+        yaw = wrap_angle(AxB[2] + BxC[2])
         return np.array([x, y, yaw])
 
     def odom_path_pub(self):
-        print("Publishing odom")
         # Transform theta from euler to quaternion
         q = quaternion_from_euler(0, 0, float(self.xk[2]))
 
@@ -142,12 +158,12 @@ class DeadReckoning:
         odom.pose.pose.orientation.z = q[2]
         odom.pose.pose.orientation.w = q[3]
 
-        # odom.pose.covariance = [self.Pk[0, 0], self.Pk[0, 1], 0, 0, 0, self.Pk[0, 2],
-        #                         self.Pk[1, 0], self.Pk[1,1], 0, 0, 0, self.Pk[1, 2],
-        #                         0, 0, 0, 0, 0, 0,
-        #                         0, 0, 0, 0, 0, 0,
-        #                         0, 0, 0, 0, 0, 0,
-        #                         self.Pk[2, 0], self.Pk[2, 1], 0, 0, 0, self.Pk[2, 2]]
+        odom.pose.covariance = [self.Pk[0, 0], self.Pk[0, 1], 0, 0, 0, self.Pk[0, 2],
+                                self.Pk[1, 0], self.Pk[1,1], 0, 0, 0, self.Pk[1, 2],
+                                0, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0,
+                                0, 0, 0, 0, 0, 0,
+                                self.Pk[2, 0], self.Pk[2, 1], 0, 0, 0, self.Pk[2, 2]]
 
         odom.twist.twist.linear.x = self.v
         odom.twist.twist.angular.z = self.w

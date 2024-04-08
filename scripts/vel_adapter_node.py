@@ -19,8 +19,8 @@ class CmdVelAdapter:
         #Publish passive joint angles
         msgOut = Float64MultiArray()
         
-        left_wheel_vel = msg.linear.x - (msg.angular.z * self.wheel_base / 2)
-        right_wheel_vel = msg.linear.x + (msg.angular.z * self.wheel_base / 2)
+        left_wheel_vel = msg.linear.x + (msg.angular.z * self.wheel_base / 2)
+        right_wheel_vel = msg.linear.x - (msg.angular.z * self.wheel_base / 2)
 
         msgOut.data = [left_wheel_vel,right_wheel_vel]
         self.vel_pub.publish(msgOut)
