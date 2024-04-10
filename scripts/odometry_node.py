@@ -148,7 +148,7 @@ class DeadReckoning:
     def oplus(self):
         AxB = self.xk
         BxC = self.uk
-        theta = self.xk[2,0]
+        theta = float(self.xk[2,0])
 
         AxC = np.array([
             AxB[0,0] + BxC[0,0] * cos(theta) - BxC[1,0] * sin(theta),
