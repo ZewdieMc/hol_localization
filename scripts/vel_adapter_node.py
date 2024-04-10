@@ -21,7 +21,7 @@ class CmdVelAdapter:
         left_wheel_vel = msg.linear.x + (msg.angular.z * self.wheel_base / 2) 
         right_wheel_vel = msg.linear.x - (msg.angular.z * self.wheel_base / 2)
 
-        msgOut.data = [right_wheel_vel/self.wheel_radius,left_wheel_vel/self.wheel_radius]
+        msgOut.data = [left_wheel_vel/self.wheel_radius, right_wheel_vel/self.wheel_radius]
         self.vel_pub.publish(msgOut)
 
 if __name__ == '__main__':

@@ -114,9 +114,7 @@ class DeadReckoning:
         ])
 
         self.Qk = Aj @ self.Qw @ np.transpose(Aj)
-        # Qk = np.eye(3)*0.2
         #displacement
-        print(self.Qk)
         displacement = np.array([d*cos(dtheta), d*sin(dtheta), dtheta])
         self.uk = displacement.reshape(-1,1)
 
@@ -132,8 +130,8 @@ class DeadReckoning:
         # Calculate Jacobians with respect to state vector#!(x, y, theta)
         J1_o = np.array([
                       [1, 0, -sin(theta) * self.uk[0, 0]],
-                      [0, 1,  cos(theta) * self.uk[0, 0] ],
-                      [0, 0, 1                                        ]
+                      [0, 1,  cos(theta) * self.uk[0, 0]],
+                      [0, 0, 1                          ]
                       ])
  
         # Calculate Jacobians with respect to noise #!(vr, vl)
@@ -150,7 +148,7 @@ class DeadReckoning:
     def oplus(self):
         AxB = self.xk
         BxC = self.uk
-        theta = float(self.xk[2,0])
+        theta = self.xk[2,0]
 
         AxC = np.array([
             AxB[0,0] + BxC[0,0] * cos(theta) - BxC[1,0] * sin(theta),
@@ -161,8 +159,7 @@ class DeadReckoning:
 
     def odom_path_pub(self):
         # Transform theta from euler to quaternion
-        q = quaternion_from_euler(0, 0, float(wrap_angle(self.xk[2, 0])))
-
+        q = quaternion_from_euler(0, 0, float(wrap_angle(self.xk[2])))
         # Publish predicted odom
         odom = Odometry()
         odom.header.stamp = rospy.Time.now()
@@ -196,7 +193,7 @@ class DeadReckoning:
 if __name__ == '__main__':
 
     rospy.init_node('Dead_reckoning')
-    robot = DeadReckoning("/turtlebot/joint_states", "/odom")
+    robot = DeadReckoning("/turtlebot/joint_states", "/turtlebot/odom")
     rospy.loginfo("Dead reckoning node started")
 
     rospy.spin()
