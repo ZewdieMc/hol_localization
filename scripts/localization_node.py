@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
 import rospy
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Imu
 from  nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped
 import numpy as np
@@ -9,12 +9,12 @@ from numpy import cos, sin
 from tf.transformations import quaternion_from_euler
 import tf
 from dead_reckoning import DeadReckoning
-from scripts.PEKFSLAM import PEKFSLAM
+from PEKFSLAM import PEKFSLAM
+from utils.ekf_utils import pose_prediction, wrap_angle
 
-def wrap_angle(ang):
-    return ang + (2.0 * np.pi * np.floor((np.pi - ang) / (2.0 * np.pi)))
+
 class LocalizationNode:
-    def __init__(self, joint_state_topic, odom_topic, Wb=0.235, Wr=0.035):
+    def __init__(self, joint_state_topic, odom_topic,imu_topic, Wb=0.235, Wr=0.035):
         # Dead Reckoning Module
         self.dr = DeadReckoning(Wb, Wr)
         # wheel joint names
@@ -36,9 +36,6 @@ class LocalizationNode:
 
         # Joint State Publisher
         self.joint_state_pub = rospy.Publisher(joint_state_topic, JointState, queue_size=1)
-
-        # ODOM SUBSCRIBER
-        self.odom_sub = rospy.Subscriber(odom_topic, Odometry, self.odom_callback)
         
         # ODOM PUBLISHER
         self.odom_pub = rospy.Publisher(odom_topic, Odometry, queue_size=1)
@@ -46,7 +43,10 @@ class LocalizationNode:
         # JOINT STATE SUBSCRIBER #! Gives the wheel angular velocities
         self.joint_state_sub = rospy.Subscriber(joint_state_topic, JointState, self.joint_state_callback)
 
-        rospy.Timer(rospy.Duration(0.05), self.odom_pub)
+        # IMU SUBSCRIBER
+        self.imu_sub = rospy.Subscriber(imu_topic, Imu, self.imu_callback)
+
+        rospy.Timer(rospy.Duration(0.05), self.odom_msg_pub)
 
 
     ##################################################################
@@ -74,13 +74,27 @@ class LocalizationNode:
             self.right_vel_arrived = False
 
             uk, Qk = self.dr.get_displacement(self.left_vel, self.right_vel)
-            self.filter.prediction(uk, Qk)
-         
+            xk_bar, Pk_bar = self.filter.prediction(uk, Qk)
+
+    def imu_callback(self, data):
+        '''
+        callback for /imu
+        '''
+        q = [data.orientation.x,data.orientation.y,data.orientation.z,data.orientation.w]
+        euler = tf.transformations.euler_from_quaternion(q)
+        
+        zk = np.array([wrap_angle(euler[2])]).reshape(-1,1)
+        Rk = np.array([0.01]).reshape(-1,1)
+
+        self.filter.update_imu(zk,Rk)
+        
+    
+        
 
     ##################################################################
     #### Timer Functions
     ##################################################################
-    def odom_pub(self):
+    def odom_msg_pub(self,_):
         '''
         Publish /odom and TF using current state vector
         '''
@@ -89,7 +103,7 @@ class LocalizationNode:
         odom.header.frame_id = "world_ned"
         odom.child_frame_id = "turtlebot/kobuki/base_footprint"
 
-        odom.pose = self.get_robot_pose(self.filter.xk, self.filter.Pk)
+        odom.pose = self.get_robot_pose(self.filter.xk, self.filter.Pk).pose
 
         self.odom_pub.publish(odom)
 
@@ -105,10 +119,10 @@ class LocalizationNode:
         '''
         extract robot pose from state vector
         '''
+        robot_pose = PoseWithCovarianceStamped()
         robot_pose.header.stamp = rospy.Time.now()
         robot_pose.header.frame_id = "world_ned"
 
-        robot_pose = PoseWithCovarianceStamped()
         robot_pose.pose.pose.position.x = xk[0,0]
         robot_pose.pose.pose.position.y = xk[1,0]
         robot_pose.pose.pose.position.z = 0
@@ -133,7 +147,7 @@ class LocalizationNode:
 if __name__ == '__main__':
 
     rospy.init_node('localization')
-    robot = LocalizationNode("/turtlebot/joint_states", "/odom")
+    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu")
     rospy.loginfo("Localization node started")
 
     rospy.spin()

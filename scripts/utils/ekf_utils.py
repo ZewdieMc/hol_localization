@@ -32,7 +32,7 @@ def J1_oplus(xk_1,uk):
                     ])
     return J1_o
 
-def J2_oplus(xk_1,wk):
+def J2_oplus(xk_1):
     theta = wrap_angle(float(xk_1[2,0]))
     # Calculate Jacobians with respect to state vector#!(x, y, theta)
     J2_o = np.array([[cos(theta),    -sin(theta),   0.0],
@@ -41,13 +41,13 @@ def J2_oplus(xk_1,wk):
     
     return J2_o
 
-def pose_prediction(xk_1,Pk_1,uk,Qk):
+def pose_prediction(xk_1,Pk_1,uk,Qk, Wk = 0):
     # Calculate Jacobians with resp(J2_o @ self.A)ect to noise #!(vr, vl)
     J1_o = J1_oplus(xk_1,uk)
-    J2_o = J1_oplus(xk_1)
+    J2_o = J2_oplus(xk_1)
 
     # pose update
     xk_bar = oplus(xk_1, uk )
-    Pk_bar = (J1_o @ Pk_1 @ J1_o.T) + (J2_o @ Qk @ J2_o.T )
+    Pk_bar = (J1_o @ Pk_1 @ J1_o.T) + (J2_o @ Qk @ J2_o.T ) + Wk
 
     return xk_bar, Pk_bar
