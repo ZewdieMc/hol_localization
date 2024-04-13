@@ -28,8 +28,9 @@ class DeadReckoning:
         self.right_wheel_name = "turtlebot/kobuki/wheel_right_joint"
 
 
-        self.Qw = np.array([[20**2, 0],
-                            [0, 20**2]])
+        self.Qk = np.array([[0.2**2, 0, 0],
+                            [0, 0.2**2, 0],
+                            [0, 0, 0]])
         
         #robot pose and uncertainty
         self.xk = np.array([0, 0, 0]).reshape(-1,1)
@@ -50,8 +51,9 @@ class DeadReckoning:
         self.w = 0
 
         self.last_time = rospy.Time.now()
-        self.left_vel_arrived = False
-        self.right_vel_arrived = False
+       
+        # both reading checker
+        self.both_whls_rd = [False, False]
 
         # odom measurement
         self.uk = np.array([0, 0, 0]).reshape(-1,1)
@@ -59,19 +61,17 @@ class DeadReckoning:
     def joint_state_callback(self, data):
         if data.name[0] == self.left_wheel_name:
             self.left_vel = data.velocity[0]
-            self.left_vel_arrived = True
-
+            self.both_whls_rd[0] = True
         elif data.name[0] == self.right_wheel_name:
             self.right_vel = data.velocity[0]
-            
-            if self.left_vel_arrived:
+            self.both_whls_rd[1] = True
+
+            if all(self.both_whls_rd):
+                self.dt = (rospy.Time.now() - self.last_time).to_sec()
+                self.last_time = rospy.Time.now()
                 self.compute_odometry()
-
-                # Publish the predicted odometry to rviz
                 self.odom_path_pub()
-
-                #! Reset the flag
-                self.left_vel_arrived = False
+                self.both_whls_rd = [False, False]
 
     def compute_odometry(self):
         # Linear wheel velocities
@@ -82,41 +82,8 @@ class DeadReckoning:
         self.v = (vr + vl) / 2
         self.w = (vl - vr)/ self.Wb
 
-        # delta t, time difference between two consecutive odometry readings
-        self.dt = (rospy.Time.now() - self.last_time).to_sec()
-        
-        #update last time
-        self.last_time = rospy.Time.now()
-
-        self.A = np.array([ #! not sure
-            [0.5*self.Wr*self.dt,           0.5*self.Wr*self.dt],
-            [0.0005,                             0.0005],
-            [(0.5 * self.Wr*self.dt)/self.Wb, -(0.5 * self.Wr*self.dt)/self.Wb],
-                
-                ])
-        
-        r  = self.Wr
-        b = self.Wb
-        t = self.dt
-        dtheta = self.w * self.dt
-        d = self.v * self.dt
-        Aj = np.array([
-            [r*t/2 * cos(dtheta) - sin(dtheta)*r*t/b * d, r*t/2 * cos(dtheta) + sin(dtheta)*r*t/b * d],
-            [r*t/2 * sin(dtheta) + cos(dtheta)*r*t/b * d, r*t/2 * sin(dtheta) - cos(dtheta)*r*t/b * d],
-            [r*t/b, -r*t/b]
-
-        ])
-        Aj = np.array([
-            [r*t/2 * cos(dtheta) - sin(dtheta)*r*t/b * d, r*t/2 * cos(dtheta) + sin(dtheta)*r*t/b * d],
-            [0.005, 0.005],
-            [r*t/b, -r*t/b]
-
-        ])
-
-        self.Qk = Aj @ self.Qw @ np.transpose(Aj)
         #displacement
-        displacement = np.array([d*cos(dtheta), d*sin(dtheta), dtheta])
-        self.uk = displacement.reshape(-1,1)
+        self.uk = np.array([self.v * self.dt, 0, self.w * self.dt]).reshape(-1,1)
 
         #predicted state
         self.prediction()
@@ -130,14 +97,22 @@ class DeadReckoning:
         # Calculate Jacobians with respect to state vector#!(x, y, theta)
         J1_o = np.array([
                       [1, 0, -sin(theta) * self.uk[0, 0]],
-                      [0, 1,  cos(theta) * self.uk[0, 0]],
-                      [0, 0, 1                          ]
+                      [0, 1,  cos(theta) * self.uk[0, 0] ],
+                      [0, 0, 1                                        ]
                       ])
  
         # Calculate Jacobians with respect to noise #!(vr, vl)
-        J2_o = np.array([[cos(float(self.xk[2])),    -sin(float(self.xk[2])),   0.0],
-                       [sin(float(self.xk[2])),     cos(float(self.xk[2])),   0.0],
-                       [0.0,               0.0,             1.0]])
+        # J2_o = np.array([
+        #                 [0.5 * r * cos(theta) * dt,    0.5 * r * cos(theta) * dt],
+        #                 [0.5 * r * sin(theta) * dt,    0.5 * r * sin(theta) * dt],
+        #                 [(r / self.Wb) * dt,           -(r / self.Wb) * dt      ]
+        #                 ])
+
+        J2_o = np.array([
+            [cos(theta), -sin(theta), 0.0],
+            [sin(theta),  cos(theta), 0.0],
+            [0.0,             0.0,            1.0]
+        ])
         
         # pose update
         self.xk = self.oplus()

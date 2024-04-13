@@ -16,16 +16,16 @@ main ()
 {
   // Loading first scan of room.
   pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-  if (pcl::io::loadPCDFile<pcl::PointXYZ> ("./room_scan1.pcd", *target_cloud) == -1)
+  if (pcl::io::loadPCDFile<pcl::PointXYZ> ("./room_scan3.pcd", *target_cloud) == -1)
   {
-    PCL_ERROR ("Couldn't read file room_scan1.pcd \n");
+    PCL_ERROR ("Couldn't read file room_scan3.pcd \n");
     return (-1);
   }
-  std::cout << "Loaded " << target_cloud->size () << " data points from room_scan1.pcd" << std::endl;
+  std::cout << "Loaded " << target_cloud->size () << " data points from room_scan3.pcd" << std::endl;
 
   // Loading second scan of room from new perspective.
   pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-  if (pcl::io::loadPCDFile<pcl::PointXYZ> ("./room_scan2.pcd", *input_cloud) == -1)
+  if (pcl::io::loadPCDFile<pcl::PointXYZ> ("./room_scan4.pcd", *input_cloud) == -1)
   {
     PCL_ERROR ("Couldn't read file room_scan2.pcd \n");
     return (-1);
@@ -35,7 +35,7 @@ main ()
   // Filtering input scan to roughly 10% of original size to increase speed of registration.
   pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ>);
   pcl::ApproximateVoxelGrid<pcl::PointXYZ> approximate_voxel_filter;
-  approximate_voxel_filter.setLeafSize (0.2, 0.2, 0.2);
+  approximate_voxel_filter.setLeafSize (0.05, 0.05, 0.05);
   approximate_voxel_filter.setInputCloud (input_cloud);
   approximate_voxel_filter.filter (*filtered_cloud);
   std::cout << "Filtered cloud contains " << filtered_cloud->size ()
@@ -46,11 +46,11 @@ main ()
 
   // Setting scale dependent NDT parameters
   // Setting minimum transformation difference for termination condition.
-  ndt.setTransformationEpsilon (0.01);
+  ndt.setTransformationEpsilon (0.0001);
   // Setting maximum step size for More-Thuente line search.
   ndt.setStepSize (0.1);
   //Setting Resolution of NDT grid structure (VoxelGridCovariance).
-  ndt.setResolution (1.0);
+  ndt.setResolution (1);
 
   // Setting max number of registration iterations.
   ndt.setMaximumIterations (35);
@@ -60,9 +60,9 @@ main ()
   // Setting point cloud to be aligned to.
   ndt.setInputTarget (target_cloud);
 
-  // Set initial alignment estimate found using robot odometry.
-  Eigen::AngleAxisf init_rotation (0.6931, Eigen::Vector3f::UnitZ ());
-  Eigen::Translation3f init_translation (1.79387, 0.720047, 0);
+  //! Set initial alignment estimate found using robot odometry.
+  Eigen::AngleAxisf init_rotation (0, Eigen::Vector3f::UnitZ ());
+  Eigen::Translation3f init_translation (0, 0.0, 0);
   Eigen::Matrix4f init_guess = (init_translation * init_rotation).matrix ();
 
   // Calculating required rigid transform to align the input cloud to the target cloud.
@@ -107,6 +107,7 @@ main ()
     viewer_final->spinOnce (100);
     std::this_thread::sleep_for(100ms);
   }
+  std::cout << ndt.getFinalTransformation () <<   std::endl;
 
   return (0);
 }
