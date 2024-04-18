@@ -20,7 +20,7 @@
 
 using namespace std::chrono_literals;
 
-std::stack<pcl::PointCloud<pcl::PointXYZ>::Ptr> cloud_stack;
+std::stack<pcl::PointCloud<pcl::PointXYZ>> cloud_stack;
 ros::Time last_time = ros::Time(0);
 pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud (new pcl::PointCloud<pcl::PointXYZ>);
@@ -29,20 +29,13 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr output_cloud (new pcl::PointCloud<pcl::Point
 
 int registeration ()
 {
-  std::cout << "Target cloud contains" << target_cloud->size () << " data points from previous scan" << std::endl;
-  std::cout<<" target cloud address: "<<target_cloud<<std::endl;
-  
-  std::cout << "Input cloud contains " << input_cloud->size () << " data points from current scan" << std::endl;
-  std::cout<<" input cloud address: "<<input_cloud<<std::endl;
-
-  
   pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ>);
   pcl::ApproximateVoxelGrid<pcl::PointXYZ> approximate_voxel_filter;
   approximate_voxel_filter.setLeafSize (0.05, 0.05, 0.05);
   approximate_voxel_filter.setInputCloud (input_cloud);
   approximate_voxel_filter.filter (*filtered_cloud);
   std::cout << "Filtered cloud contains " << filtered_cloud->size ()
-            << " data points from room_scan2.pcd" << std::endl;
+            << " data points" << std::endl;
 
   // Initializing Normal Distributions Transform (NDT).
   pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
@@ -85,54 +78,49 @@ int registeration ()
   return (0);
 }
 
-// void visualize(){
-//     // Initializing point cloud visualizer
-//   pcl::visualization::PCLVisualizer::Ptr
-//   viewer_final (new pcl::visualization::PCLVisualizer ("3D Viewer"));
-//   viewer_final->setBackgroundColor (0, 0, 0);
+void visualize(){
+    // Initializing point cloud visualizer
+  pcl::visualization::PCLVisualizer::Ptr
+  viewer_final (new pcl::visualization::PCLVisualizer ("3D Viewer"));
+  viewer_final->setBackgroundColor (0, 0, 0);
 
-//   // Coloring and visualizing target cloud (red).
-//   pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ>
-//   target_color (target_cloud, 255, 0, 0);
-//   viewer_final->addPointCloud<pcl::PointXYZ> (target_cloud, target_color, "target cloud");
-//   viewer_final->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE,
-//                                                   1, "target cloud");
+  // Coloring and visualizing target cloud (red).
+  pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ>
+  target_color (target_cloud, 255, 0, 0);
+  viewer_final->addPointCloud<pcl::PointXYZ> (target_cloud, target_color, "target cloud");
+  viewer_final->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE,
+                                                  1, "target cloud");
 
-//   // Coloring and visualizing transformed input cloud (green).
-//   pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ>
-//   output_color (output_cloud, 0, 255, 0);
-//   viewer_final->addPointCloud<pcl::PointXYZ> (output_cloud, output_color, "output cloud");
-//   viewer_final->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE,
-//                                                   1, "output cloud");
+  // Coloring and visualizing transformed input cloud (green).
+  pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ>
+  output_color (output_cloud, 0, 255, 0);
+  viewer_final->addPointCloud<pcl::PointXYZ> (output_cloud, output_color, "output cloud");
+  viewer_final->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE,
+                                                  1, "output cloud");
 
-//   // Starting visualizer
-//   viewer_final->addCoordinateSystem (1.0, "global");
-//   viewer_final->initCameraParameters ();
+  // Starting visualizer
+  viewer_final->addCoordinateSystem (1.0, "global");
+  viewer_final->initCameraParameters ();
 
-//   // Wait until visualizer window is closed.
-//   while (!viewer_final->wasStopped ())
-//   {
-//     viewer_final->spinOnce (100);
-//     std::this_thread::sleep_for(100ms);
-//   }
-// }
+  // Wait until visualizer window is closed.
+  while (!viewer_final->wasStopped ())
+  {
+    viewer_final->spinOnce (100);
+    std::this_thread::sleep_for(100ms);
+  }
+}
 
-void trial_callback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
+void cloud_callback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
 {
   int init_guess[] = {0, 0, 0, 0};
   if (last_time.isZero())
   {
     pcl::fromROSMsg(*cloud_msg, *target_cloud);
-    cloud_stack.push(target_cloud);
+    cloud_stack.push(*target_cloud);
   }
   else if(!last_time.isZero()){
     pcl::fromROSMsg(*cloud_msg, *input_cloud);
-    cloud_stack.push(input_cloud);
-    std::cout << "In callback: " << std::endl;
-    std::cout << "input cloud address: " << input_cloud << std::endl;
-    std::cout<<"target cloud address: "<<target_cloud<<std::endl;
-    
-    std::cout<<"In registration: "<<std::endl;
+    cloud_stack.push(*input_cloud);
     registeration();
     *target_cloud = *input_cloud;
   }
@@ -143,10 +131,13 @@ int main(int argc, char **argv){
   ros::init(argc, argv, "ndt_node");
   ros::NodeHandle nh;
 
-  ros::Subscriber sub = nh.subscribe<sensor_msgs::PointCloud2>("/cloud_in", 1, trial_callback);
+  ros::Subscriber sub = nh.subscribe<sensor_msgs::PointCloud2>("/cloud_in", 1, cloud_callback);
   ros::Rate loop_rate(0.5);
   while(ros::ok()){
     ros::spinOnce();
     loop_rate.sleep();
   }
+
+  visualize();
+  return 0;
 }
