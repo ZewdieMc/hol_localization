@@ -1,14 +1,20 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <geometry_msgs/TransformStamped.h>
+#include <geometry_msgs/Quaternion.h>
+
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/registration/ndt.h>
-// #include <ho_localization/PointCloudTransform.h>
+#include <ho_localization/PointCloudTransform.h>
+
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
 
 #include <iostream>
 #include <thread>
+
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
@@ -25,6 +31,12 @@ ros::Time last_time = ros::Time(0);
 pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr output_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+
+//! Set initial alignment estimate found using robot odometry.
+Eigen::AngleAxisf init_rotation (0, Eigen::Vector3f::UnitZ ());
+Eigen::Translation3f init_translation (0, 0.0, 0);
+Eigen::Matrix4f init_guess = (init_translation * init_rotation).matrix ();
+Eigen::Matrix4f final_tf;
 
 
 int registeration ()
@@ -55,11 +67,7 @@ int registeration ()
   ndt.setInputSource (filtered_cloud);
   // Setting point cloud to be aligned to.
   ndt.setInputTarget (target_cloud);
-
-  //! Set initial alignment estimate found using robot odometry.
-  Eigen::AngleAxisf init_rotation (0, Eigen::Vector3f::UnitZ ());
-  Eigen::Translation3f init_translation (0, 0.0, 0);
-  Eigen::Matrix4f init_guess = (init_translation * init_rotation).matrix ();
+  
 
   // Calculating required rigid transform to align the input cloud to the target cloud.
   ndt.align (*output_cloud, init_guess);
@@ -74,6 +82,7 @@ int registeration ()
   pcl::io::savePCDFileASCII ("room_scan2_transformed.pcd", *output_cloud);
 
   std::cout << ndt.getFinalTransformation () <<   std::endl;
+  final_tf = ndt.getFinalTransformation();
 
   return (0);
 }
@@ -127,11 +136,66 @@ void cloud_callback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
   last_time = ros::Time::now();
 }
 
+bool matching_service(ho_localization::PointCloudTransform::Request  &req,
+         ho_localization::PointCloudTransform::Response &res)
+{
+  // Translation
+  double x, y;
+  x = req.initial_guese.translation.x;
+  y = req.initial_guese.translation.y;
+
+  // Orientation to RPY
+  tf2::Quaternion quat;
+  tf2::convert(req.initial_guese.rotation, quat);  // Convert to tf2 quaternion
+  double roll, pitch, yaw;
+  tf2::Matrix3x3(quat).getRPY(roll, pitch, yaw);  // Extract RPY angle
+
+  // initial guese 
+  Eigen::AngleAxisf init_rotation (yaw, Eigen::Vector3f::UnitZ ());
+  Eigen::Translation3f init_translation (x, y, 0.0);
+  init_guess = (init_translation * init_rotation).matrix ();
+
+  // pc2 
+  sensor_msgs::PointCloud2ConstPtr cloud_msg = boost::make_shared<const sensor_msgs::PointCloud2>(req.target);
+  pcl::fromROSMsg(*cloud_msg, *target_cloud);
+  cloud_stack.push(*target_cloud);
+  sensor_msgs::PointCloud2ConstPtr cloud_msg2 = boost::make_shared<const sensor_msgs::PointCloud2>(req.target);
+  pcl::fromROSMsg(*cloud_msg2, *input_cloud);
+  cloud_stack.push(*input_cloud);
+
+  // start matching process
+  registeration();
+
+  // Response Final Transform
+  Eigen::Vector3f translation = final_tf.block<3, 1>(0, 3);
+  Eigen::Matrix3f rotationMatrix = final_tf.block<3, 3>(0, 0);
+  Eigen::Quaternionf rotationQuat(rotationMatrix);
+
+  // Create a geometry_msgs::Transform message
+  geometry_msgs::Transform transformMsg;
+  
+  // Set the translation components
+  transformMsg.translation.x = translation.x();
+  transformMsg.translation.y = translation.y();
+  transformMsg.translation.z = translation.z();
+
+  // Set the rotation components (quaternion)
+  transformMsg.rotation.x = rotationQuat.x();
+  transformMsg.rotation.y = rotationQuat.y();
+  transformMsg.rotation.z = rotationQuat.z();
+  transformMsg.rotation.w = rotationQuat.w();
+
+  res.transform = transformMsg;
+
+  return true;
+}
+
 int main(int argc, char **argv){
   ros::init(argc, argv, "ndt_node");
   ros::NodeHandle nh;
 
   ros::Subscriber sub = nh.subscribe<sensor_msgs::PointCloud2>("/cloud_in", 1, cloud_callback);
+  ros::ServiceServer service = nh.advertiseService("ndt_matching", matching_service);  
   ros::Rate loop_rate(0.5);
   while(ros::ok()){
     ros::spinOnce();
