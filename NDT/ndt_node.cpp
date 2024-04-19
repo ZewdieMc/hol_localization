@@ -20,7 +20,7 @@
 
 using namespace std::chrono_literals;
 
-std::stack<pcl::PointCloud<pcl::PointXYZ>> cloud_stack;
+std::stack<pcl::PointCloud<pcl::PointXYZ>> cloud_stack;//! Map
 ros::Time last_time = ros::Time(0);
 pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud (new pcl::PointCloud<pcl::PointXYZ>);
