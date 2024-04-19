@@ -160,10 +160,8 @@ bool matching_service(ho_localization::PointCloudTransform::Request  &req,
   // pc2 
   sensor_msgs::PointCloud2ConstPtr cloud_msg = boost::make_shared<const sensor_msgs::PointCloud2>(req.target);
   pcl::fromROSMsg(*cloud_msg, *target_cloud);
-  cloud_stack.push(*target_cloud);
-  sensor_msgs::PointCloud2ConstPtr cloud_msg2 = boost::make_shared<const sensor_msgs::PointCloud2>(req.target);
+  sensor_msgs::PointCloud2ConstPtr cloud_msg2 = boost::make_shared<const sensor_msgs::PointCloud2>(req.current);
   pcl::fromROSMsg(*cloud_msg2, *input_cloud);
-  cloud_stack.push(*input_cloud);
 
   // start matching process
   registeration();
