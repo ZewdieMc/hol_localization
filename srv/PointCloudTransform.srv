@@ -1,4 +1,5 @@
+geometry_msgs/Transform initial_guese
 sensor_msgs/PointCloud2 target
 sensor_msgs/PointCloud2 current
 ---
-geometry_msgs/TransformStamped transform
+geometry_msgs/Transform transform
