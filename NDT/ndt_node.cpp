@@ -122,6 +122,7 @@ void visualize(){
 void cloud_callback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
 {
   int init_guess[] = {0, 0, 0, 0};
+  //save first scan as target
   if (last_time.isZero())
   {
     pcl::fromROSMsg(*cloud_msg, *target_cloud);
@@ -131,6 +132,7 @@ void cloud_callback(const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
     pcl::fromROSMsg(*cloud_msg, *input_cloud);
     cloud_stack.push(*input_cloud);
     registeration();
+    // Update target cloud for next registration
     *target_cloud = *input_cloud;
   }
   last_time = ros::Time::now();
