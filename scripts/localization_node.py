@@ -10,7 +10,8 @@ from tf.transformations import quaternion_from_euler
 import tf
 from dead_reckoning import DeadReckoning
 from PEKFSLAM import PEKFSLAM
-from utils.ekf_utils import pose_prediction, wrap_angle
+from utils.ekf_utils import pose_prediction, wrap_angle, oplus ,ominus
+from ho_localization.srv import OdomTransform, OdomTransformRequest, OdomTransformResponse
 
 
 class LocalizationNode:
@@ -25,7 +26,7 @@ class LocalizationNode:
         self.right_vel_arrived = False
         
         # Filter Module
-        self.xk_0 = np.array([0, 0, 0]).reshape(-1,1)
+        self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
         self.Pk_0 = np.array([[0.0001, 0 ,0],
                             [0, 0.00001, 0],
                             [0, 0 ,0.0001]])
@@ -33,6 +34,8 @@ class LocalizationNode:
         self.filter = PEKFSLAM(self.xk_0, self.Pk_0)
         
         self.robot_pose = self.get_robot_pose(self.xk_0, self.Pk_0)
+
+        self.previous_pose = self.filter.xk[0:3] # For initial guese calculation
 
         # Joint State Publisher
         self.joint_state_pub = rospy.Publisher(joint_state_topic, JointState, queue_size=1)
@@ -44,7 +47,10 @@ class LocalizationNode:
         self.joint_state_sub = rospy.Subscriber(joint_state_topic, JointState, self.joint_state_callback)
 
         # IMU SUBSCRIBER
-        self.imu_sub = rospy.Subscriber(imu_topic, Imu, self.imu_callback)
+        # self.imu_sub = rospy.Subscriber(imu_topic, Imu, self.imu_callback)
+
+        # Initial Guese service
+        self.initial_srv = rospy.Service('get_initial_guess', OdomTransform, self.handle_get_initial_guess)
 
         rospy.Timer(rospy.Duration(0.05), self.odom_msg_pub)
 
@@ -87,7 +93,32 @@ class LocalizationNode:
         Rk = np.array([0.01]).reshape(-1,1)
 
         self.filter.update_imu(zk,Rk)
+
+    def handle_get_initial_guess(self, req):
+        rospy.logwarn("Handle get_initial_guess")
+        self.current_pose = self.filter.xk[0:3]
+        dis = oplus(ominus(self.previous_pose), self.current_pose)
+        # claculate displacement
+        dx = dis[0,0]
+        dy = dis[1,0]
+        dyaw = dis[2,0]
+        q = quaternion_from_euler(0, 0, float(dyaw))
+
+        # service response
+        res = OdomTransformResponse()
+        res.transform.translation.x = dx
+        res.transform.translation.y = dy
+        res.transform.translation.z = 0
+        res.transform.rotation.x = q[0]
+        res.transform.rotation.y = q[1]
+        res.transform.rotation.z = q[2]
+        res.transform.rotation.w = q[3]
+
+        # Update previous stamp
+        self.previous_pose = self.current_pose
         
+        rospy.logwarn("Initial Guese: {}".format(res.transform))
+        return res
     
         
 

@@ -27,9 +27,7 @@ class PEKFSLAM:
     def update_imu(self, zk, Rk):
         h = self.xk[2,0]
         Hk = np.zeros((zk.shape[0],self.xk.shape[0]))
-        print(Hk)
         Hk[0,2] = 1
-        print(Hk)
         Vk = np.eye(zk.shape[0])
         xk,Pk = self.update(zk, Rk, self.xk, self.Pk, Hk, Vk, h)
 

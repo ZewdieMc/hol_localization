@@ -1,7 +1,6 @@
 <launch>
-        <include file="$(find turtlebot_simulation)/launch/kobuki_motion_planning.launch" /> 
-        <!-- <node pkg="ho_localization" type="odometry_node.py" name="dead_reckoning" output="screen"/> -->
-        <node pkg="ho_localization" type="laser_to_pc_node.py" name="laserscan_to_pointcloud"/>
-        <node pkg="ho_localization" type="vel_adapter_node.py" name="steering_node" output="screen"/>
+        <node pkg="ho_localization" type="ndt_node" name="ndt_node" output="screen"/>
+        <node pkg="ho_localization" type="localization_node.py" name="odom_node" output="screen"/>
+        <node pkg="ho_localization" type="laser_matching_node.py" name="laser_matching_node" output="screen"/>
 
 </launch>

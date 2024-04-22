@@ -54,7 +54,7 @@ int registeration ()
 
   // Setting scale dependent NDT parameters
   // Setting minimum transformation difference for termination condition.
-  ndt.setTransformationEpsilon (0.0001);
+  ndt.setTransformationEpsilon (0.00001);
   // Setting maximum step size for More-Thuente line search.
   ndt.setStepSize (0.1);
   //Setting Resolution of NDT grid structure (VoxelGridCovariance).
@@ -194,14 +194,14 @@ int main(int argc, char **argv){
   ros::init(argc, argv, "ndt_node");
   ros::NodeHandle nh;
 
-  ros::Subscriber sub = nh.subscribe<sensor_msgs::PointCloud2>("/cloud_in", 1, cloud_callback);
+  // ros::Subscriber sub = nh.subscribe<sensor_msgs::PointCloud2>("/cloud_in", 1, cloud_callback);
   ros::ServiceServer service = nh.advertiseService("ndt_matching", matching_service);  
-  ros::Rate loop_rate(0.5);
+  // ros::Rate loop_rate();
   while(ros::ok()){
     ros::spinOnce();
-    loop_rate.sleep();
+    // loop_rate.sleep();
   }
 
-  visualize();
+  // visualize();
   return 0;
 }

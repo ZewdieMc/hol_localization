@@ -73,6 +73,7 @@ find_package(PCL 1.10 REQUIRED COMPONENTS
 add_service_files(
   FILES
   PointCloudTransform.srv
+  OdomTransform.srv
 )
 ## Generate actions in the 'action' folder
 # add_action_files(

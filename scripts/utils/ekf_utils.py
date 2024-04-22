@@ -22,6 +22,13 @@ def oplus(AxB,BxC):
     
     return AxC
 
+def ominus(AxB):
+        
+    x = -AxB[0] * cos(AxB[2]) - AxB[1] * sin(AxB[2])
+    y = AxB[0] * sin(AxB[2]) - AxB[1] * cos(AxB[2])
+    yaw = -AxB[2]
+    return np.array([x, y, yaw])
+
 def J1_oplus(xk_1,uk):
     theta = wrap_angle(float(xk_1[2,0]))
     # Calculate Jacobians with respect to state vector#!(x, y, theta)

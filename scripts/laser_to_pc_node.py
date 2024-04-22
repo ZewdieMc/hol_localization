@@ -4,7 +4,7 @@ import rospy
 from sensor_msgs.msg import PointCloud2, LaserScan
 import laser_geometry.laser_geometry as lg
 import ros_numpy
-import open3d as oddd
+# import open3d as oddd
 import os
 
 rospy.init_node("laserscan_to_pointcloud")
@@ -20,8 +20,8 @@ def scan_cb(msg):
     cloud_arr = ros_numpy.point_cloud2.pointcloud2_to_xyz_array(pc2_msg)
     pc_pub.publish(pc2_msg)#! octomap server subscribes to this topic
     # Create Open3D point cloud 
-    pcd = oddd.geometry.PointCloud()
-    pcd.points = oddd.utility.Vector3dVector(cloud_arr)
+    # pcd = oddd.geometry.PointCloud()
+    # pcd.points = oddd.utility.Vector3dVector(cloud_arr)
 
     # Save point cloud to PCD file
     # oddd.io.write_point_cloud("room_scan2.pcd", pcd, write_ascii=False, compressed=False, print_progress=True)
