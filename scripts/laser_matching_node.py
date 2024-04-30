@@ -15,6 +15,7 @@ from utils.ekf_utils import oplus
 import sensor_msgs.point_cloud2 as pc2
 import matplotlib.pyplot as plt
 from copy import deepcopy, copy
+from std_srvs.srv import Trigger, TriggerResponse
 class LaserMatchingNode:
     def __init__(self, pc_topic, lm_odom_topic):
         
@@ -31,6 +32,14 @@ class LaserMatchingNode:
         self.pc_list = []
         self.initial_guese = TransformStamped()
         self.current_pc = None
+        # For Plotting
+        self.target_pc_list = [] 
+        self.current_pc_list = []
+        self.initial_guese_list = []
+        self.matching_tf_list = []
+        self.process_time_list = []
+        self.gt_list = []
+
 
         # Initial state
         self.xk = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
@@ -63,6 +72,8 @@ class LaserMatchingNode:
         # For odom publishing
         rospy.Timer(rospy.Duration(0.05), self.odom_msg_pub)
 
+        self.plotting_srv = rospy.Service('plot_matching', Trigger, self.handle_plot_matching)
+
 
 
     ##################################################################
@@ -78,6 +89,21 @@ class LaserMatchingNode:
 
         self.current_pc = pc 
         self.pc_pub.publish(self.current_pc)
+
+    def handle_plot_matching(self,req):
+        rospy.loginfo("handle_plot_matching")
+        self.plot_matching(self.target_pc_list, self.current_pc_list, self.matching_tf_list, self.initial_guese_list, self.process_time_list, self.gt_list)
+
+        rospy.loginfo("Finish plotting")
+        self.target_pc_list = [] 
+        self.current_pc_list = []
+        self.initial_guese_list = []
+        self.matching_tf_list = []
+        self.process_time_list = []
+        self.gt_list = []
+
+        res = TriggerResponse()
+        return res
     
         
     ##################################################################
@@ -100,6 +126,18 @@ class LaserMatchingNode:
             get_inital_guess = rospy.ServiceProxy('get_initial_guess', OdomTransform)
             resp = get_inital_guess()
             rospy.logwarn("initial guess:{}".format(resp.transform))
+            return resp.transform
+        except rospy.ServiceException as e:
+            print(f"Service call failed: {e}")
+            return None
+        
+    def get_gt(self):
+        rospy.logwarn("Calling get_gt...")
+        rospy.wait_for_service('get_gt')
+        try:
+            get_inital_guess = rospy.ServiceProxy('get_gt', OdomTransform)
+            resp = get_inital_guess()
+            rospy.logwarn("gt:{}".format(resp.transform))
             return resp.transform
         except rospy.ServiceException as e:
             print(f"Service call failed: {e}")
@@ -153,27 +191,36 @@ class LaserMatchingNode:
         '''
         
         '''
-        start = rospy.Time.now()
+        
         # update pc_list
         self.pc_list.append(self.current_pc)
 
         # request initial guese from odom node
         initial_guese =  self.get_initial_guess()
-        
+        gt = self.get_gt()
+
         # request mathcing tf
         if self.robot_moving(initial_guese):
             target_pc = self.pc_list[-2]
             current_pc = self.pc_list[-1]
             
+            start = rospy.Time.now()
             matching_tf = self.get_matching_tf(initial_guese,target_pc,current_pc)
+            process_time = (rospy.Time.now()-start).to_sec()
+            rospy.logerr("Time used: {}".format(process_time))
 
-            self.plot_matching(target_pc,current_pc,matching_tf, initial_guese)
+            self.target_pc_list.append(target_pc)
+            self.current_pc_list.append(current_pc)
+            self.initial_guese_list.append(initial_guese)
+            self.matching_tf_list.append(matching_tf)
+            self.process_time_list.append(process_time)
+            self.gt_list.append(gt)
         else:
             matching_tf = Transform()
         # update predited state
         self.xk = self.update_pose(self.xk, matching_tf)
 
-        rospy.logerr("Time used: {}".format((rospy.Time.now()-start).to_sec()))
+        
         
         
 
@@ -228,66 +275,106 @@ class LaserMatchingNode:
 
         return robot_pose
     
-    def plot_matching(self,target_pc,current_pc,matching_tf, initial_guess):
+    def plot_matching(self,target_pc,current_pc,matching_tf, initial_guess, process_time, gt):
         # Check if both point clouds are available
-        
-        # Extract point cloud data from messages
-        target_points = pc2.read_points(target_pc, field_names=("x", "y"), skip_nans=True)
-        target_points1 = copy(list(target_points))
-        target_points2 = copy(target_points1)
-        target_points3 = copy(target_points1)
+        for i in range(len(target_pc)):
+            # Extract point cloud data from messages
+            target_points = pc2.read_points(target_pc[i], field_names=("x", "y"), skip_nans=True)
+            target_points1 = copy(list(target_points))
+            target_points2 = copy(target_points1)
+            target_points3 = copy(target_points1)
+            target_points4 = copy(target_points1)
+            current_points = pc2.read_points(current_pc[i], field_names=("x", "y"), skip_nans=True)
 
-        current_points = pc2.read_points(current_pc, field_names=("x", "y"), skip_nans=True)
-
-        # Plot before matching (current_pc)
-        fig = plt.figure()
-        ax1 = fig.add_subplot(131)
-        for point in current_points:
-            ax1.scatter(point[0], point[1], c='b', marker='.',s=0.3)
-        for point in target_points1:
-            ax1.scatter(point[0], point[1], c='r', marker='x',s=1)
+            # Plot before matching (current_pc)
+            fig = plt.figure(figsize=(20, 20))
+            ax1 = fig.add_subplot(221)
+            for point in current_points:
+                ax1.scatter(point[0], point[1], c='b', marker='.',s=0.3)
+            for point in target_points1:
+                ax1.scatter(point[0], point[1], c='r', marker='x',s=1)
+            
             
 
-        ax1.set_title('Before Matching')
-        ax1.set_xlabel('X')
-        ax1.set_ylabel('Y')
-        
+            ax1.set_title('Before Matching ')
+            ax1.set_xlabel('X')
+            ax1.set_ylabel('Y')
+            
+            
+            # Transform pc using tf
+            matching_tf_stamped = TransformStamped()
+            matching_tf_stamped.transform = matching_tf[i]
+            pc_aligned = do_transform_cloud(current_pc[i], matching_tf_stamped)
+            pc_aligned_points = pc2.read_points(pc_aligned, field_names=("x", "y"), skip_nans=True)
 
-        # Transform pc using tf
-        matching_tf_stamped = TransformStamped()
-        matching_tf_stamped.transform = matching_tf
-        pc_aligned = do_transform_cloud(current_pc, matching_tf_stamped)
-        pc_aligned_points = pc2.read_points(pc_aligned, field_names=("x", "y"), skip_nans=True)
+            # Plot after matching (target_pc transformed by matching_tf)
+            ax2 = fig.add_subplot(222)
+            for point in pc_aligned_points:
+                ax2.scatter(point[0], point[1], c='b', marker='.',s=0.3)
+            for point in target_points2:
+                ax2.scatter(point[0], point[1], c='r', marker='x',s=0.3)
+            
+            x = round(matching_tf[i].translation.x,4)
+            y = round(matching_tf[i].translation.y,4)
+            q = (matching_tf[i].rotation.x, matching_tf[i].rotation.y,matching_tf[i].rotation.z,matching_tf[i].rotation.w)
+            _,_,yaw = euler_from_quaternion(q)
+            yaw = round(yaw,4)
 
-        # Plot after matching (target_pc transformed by matching_tf)
-        ax2 = fig.add_subplot(132)
-        for point in pc_aligned_points:
-            ax2.scatter(point[0], point[1], c='b', marker='.',s=0.3)
-        for point in target_points2:
-            ax2.scatter(point[0], point[1], c='r', marker='x',s=0.3)
-        ax2.set_title('After Matching')
-        ax2.set_xlabel('X')
-        ax2.set_ylabel('Y')
 
-        # Transform pc using initial guese
-        matching_tf_stamped = TransformStamped()
-        matching_tf_stamped.transform = initial_guess
-        pc_odom = do_transform_cloud(current_pc, matching_tf_stamped)
-        pc_odom_points = pc2.read_points(pc_odom, field_names=("x", "y"), skip_nans=True)
+            ax2.set_title('After Matching \n x:{} \n y:{} \n yaw:{} \n ({} s)'.format(x,y,yaw,round(process_time[i],2)))
+            ax2.set_xlabel('X')
+            ax2.set_ylabel('Y')
 
-        # Plot after matching (target_pc transformed by matching_tf)
-        ax3 = fig.add_subplot(133)
-        for point in pc_odom_points:
-            ax3.scatter(point[0], point[1], c='b', marker='.',s=0.3)
-        for point in target_points3:
-            ax3.scatter(point[0], point[1], c='r', marker='x',s=0.3)
-        ax3.set_title('After Matching')
-        ax3.set_xlabel('X')
-        ax3.set_ylabel('Y')
+            # Transform pc using initial guese
+            matching_tf_stamped = TransformStamped()
+            matching_tf_stamped.transform = initial_guess[i]
+            pc_odom = do_transform_cloud(current_pc[i], matching_tf_stamped)
+            pc_odom_points = pc2.read_points(pc_odom, field_names=("x", "y"), skip_nans=True)
 
-        
+            # Plot after matching (target_pc transformed by odom)
+            ax3 = fig.add_subplot(223)
+            for point in pc_odom_points:
+                ax3.scatter(point[0], point[1], c='b', marker='.',s=0.3)
+            for point in target_points3:
+                ax3.scatter(point[0], point[1], c='r', marker='x',s=0.3)
 
-        plt.savefig('/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/matching_plot_{}.png'.format(rospy.Time.now()))
+            x = round(initial_guess[i].translation.x,4)
+            y = round(initial_guess[i].translation.y,4)
+            q = (initial_guess[i].rotation.x, initial_guess[i].rotation.y,initial_guess[i].rotation.z,initial_guess[i].rotation.w)
+            _,_,yaw = euler_from_quaternion(q)
+            yaw = round(yaw,4)
+
+            ax3.set_title('After Matching (Odom) \n x:{} \n y:{} \n yaw:{}'.format(x,y,yaw))
+            ax3.set_xlabel('X')
+            ax3.set_ylabel('Y')
+
+            # Transform pc using gt
+            matching_tf_stamped = TransformStamped()
+            matching_tf_stamped.transform = gt[i]
+            pc_gt = do_transform_cloud(current_pc[i], matching_tf_stamped)
+            pc_gt_points = pc2.read_points(pc_gt, field_names=("x", "y"), skip_nans=True)
+
+             # Plot after matching (target_pc transformed by gt)
+            ax4 = fig.add_subplot(224)
+            for point in pc_gt_points:
+                ax4.scatter(point[0], point[1], c='b', marker='.',s=0.3)
+            for point in target_points4:
+                ax4.scatter(point[0], point[1], c='r', marker='x',s=0.3)
+
+            x = round(gt[i].translation.x,4)
+            y = round(gt[i].translation.y,4)
+            q = (gt[i].rotation.x, gt[i].rotation.y,gt[i].rotation.z,gt[i].rotation.w)
+            _,_,yaw = euler_from_quaternion(q)
+            yaw = round(yaw,4)
+
+            ax4.set_title('After Matching (GT) \n x:{} \n y:{} \n yaw:{}'.format(x,y,yaw))
+            ax4.set_xlabel('X')
+            ax4.set_ylabel('Y')
+            
+            
+            plt.tight_layout()
+
+            plt.savefig('/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/matching_plot_{}.png'.format(rospy.Time.now()))
 
 
 if __name__ == '__main__':

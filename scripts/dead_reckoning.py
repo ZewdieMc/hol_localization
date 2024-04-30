@@ -16,7 +16,7 @@ class DeadReckoning:
     def __init__(self, Wb=0.235, Wr=0.035):
 
         # wheel velocitiesWb
-        self.dt = 0.01
+        self.dt = 0.001
 
         # Wheel base
         self.Wb = Wb
@@ -24,8 +24,8 @@ class DeadReckoning:
         self.Wr = Wr
 
         # noise in encoder's velocity
-        self.Qw = np.array([[np.deg2rad(10)**2, 0],
-                            [0, np.deg2rad(10)**2]])
+        self.Qw = np.array([[10, 0],
+                            [0, 10]])
         
 
         self.last_time = rospy.Time.now()
@@ -33,21 +33,22 @@ class DeadReckoning:
         # odom measurement
         self.uk = np.array([0, 0, 0]).reshape(-1,1)
 
-    def get_displacement(self, left_vel, right_vel):
+    def get_input(self, left_vel, right_vel):
         # delta t, time difference between two consecutive odometry readings
         self.dt = (rospy.Time.now() - self.last_time).to_sec()
         
         #update last time
         self.last_time = rospy.Time.now()
 
-        dt = self.dt
-        A =  np.array([[0.5 ,0.5],[0,0],[-1/self.Wb,1/self.Wb]]) @ np.diag([dt,dt]) @ np.diag([self.Wr,self.Wr])
+        A =  np.array([[0.5*self.Wr,      0.5*self.Wr],
+                       [0,                 0             ],
+                       [self.Wr/self.Wb, -self.Wr/self.Wb]])
         
-        displacement = A @ np.array([[right_vel],[left_vel]])
-        uk = displacement
+        velocity = A @ np.array([[left_vel],[right_vel]])
+        uk = velocity
 
         Qk =(A @ self.Qw @ A.T ) 
    
-        return uk, Qk
+        return uk, Qk, self.dt
 
     
