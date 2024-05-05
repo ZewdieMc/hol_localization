@@ -72,14 +72,14 @@ int registeration ()
   // Calculating required rigid transform to align the input cloud to the target cloud.
   ndt.align (*output_cloud, init_guess);
 
-  std::cout << "Normal Distributions Transform has converged:" << ndt.hasConverged ()
-            << " score: " << ndt.getFitnessScore () << std::endl;
+  // std::cout << "Normal Distributions Transform has converged:" << ndt.hasConverged ()
+  //           << " score: " << ndt.getFitnessScore () << std::endl;
 
   // Transforming unfiltered, input cloud using found transform.
-  pcl::transformPointCloud (*input_cloud, *output_cloud, ndt.getFinalTransformation ());
+  // pcl::transformPointCloud (*input_cloud, *output_cloud, ndt.getFinalTransformation ());
 
   // Saving transformed input cloud.
-  pcl::io::savePCDFileASCII ("room_scan2_transformed.pcd", *output_cloud);
+  // pcl::io::savePCDFileASCII ("room_scan2_transformed.pcd", *output_cloud);
 
   std::cout << ndt.getFinalTransformation () <<   std::endl;
   final_tf = ndt.getFinalTransformation();

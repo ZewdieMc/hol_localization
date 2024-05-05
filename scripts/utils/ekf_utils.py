@@ -26,7 +26,7 @@ def ominus(AxB):
     x = -AxB[0] * cos(AxB[2]) - AxB[1] * sin(AxB[2])
     y = AxB[0] * sin(AxB[2]) - AxB[1] * cos(AxB[2])
     yaw = -AxB[2]
-    return np.array([x, y, yaw])
+    return np.array([x, y, yaw]).reshape(-1,1)
 
 def J1_oplus(xk_1,uk, dt):
     theta = wrap_angle(float(xk_1[2,0]))
@@ -34,6 +34,16 @@ def J1_oplus(xk_1,uk, dt):
     J1_o = np.array([
                     [1, 0, -sin(theta) * uk[0,0]*dt - cos(theta) * uk[1,0]*dt],
                     [0, 1,  cos(theta) * uk[0,0]*dt - sin(theta) * uk[1,0]*dt],
+                    [0, 0, 1                         ]
+                    ])
+    return J1_o
+
+def J1_oplus_displacement(xk_1,uk):
+    theta = wrap_angle(float(xk_1[2,0]))
+    # Calculate Jacobians with respect to state vector#!(x, y, theta)
+    J1_o = np.array([
+                    [1, 0, -sin(theta) * uk[0,0] - cos(theta) * uk[1,0]],
+                    [0, 1,  cos(theta) * uk[0,0] - sin(theta) * uk[1,0]],
                     [0, 0, 1                         ]
                     ])
     return J1_o
@@ -46,6 +56,22 @@ def J2_oplus(xk_1,dt):
                     [0.0,               0.0,         dt]])
     
     return J2_o
+
+def J2_oplus_displacement(xk_1):
+    theta = wrap_angle(float(xk_1[2,0]))
+    # Calculate Jacobians with respect to state vector#!(x, y, theta)
+    J2_o = np.array([[cos(theta),    -sin(theta),   0.0],
+                    [sin(theta),     cos(theta),   0.0],
+                    [0.0,               0.0,         1]])
+    
+    return J2_o
+
+def J_ominus(AxB):
+    J = np.array([[-cos(AxB[2,0]),    -sin(AxB[2,0]),   AxB[0,0]*sin(AxB[2,0])-AxB[1,0]*cos(AxB[2,0])],
+                    [ sin(AxB[2,0]),    -cos(AxB[2,0]),   AxB[0,0]*cos(AxB[2,0])+AxB[1,0]*sin(AxB[2,0])],
+                    [ 0.0,               0.0,            -1.0]])
+
+    return J
 
 def pose_prediction(xk_1,Pk_1,uk,Qk, Wk = 0,dt =1):
     # Calculate Jacobians with resp(J2_o @ self.A)ect to noise #!(vr, vl)

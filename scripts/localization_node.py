@@ -3,7 +3,7 @@
 import rospy
 from sensor_msgs.msg import JointState, Imu
 from  nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped, Transform
 import numpy as np
 from numpy import cos, sin
 from tf.transformations import quaternion_from_euler, euler_from_quaternion
@@ -12,11 +12,14 @@ from dead_reckoning import DeadReckoning
 from PEKFSLAM import PEKFSLAM
 from utils.ekf_utils import pose_prediction, wrap_angle, oplus ,ominus
 from ho_localization.srv import OdomTransform, OdomTransformRequest, OdomTransformResponse
+from ho_localization.srv import OdomTransform, PointCloudTransform, PointCloudTransformRequest
+
 from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 import tf2_ros
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs import point_cloud2
 from visualization_msgs.msg import Marker, MarkerArray
+import scipy
 
 class LocalizationNode:
     def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.235, Wr=0.035):
@@ -34,9 +37,14 @@ class LocalizationNode:
         
         # Filter Module
         self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
+        # self.xk_0 = np.array([0.0, 0.0, 0.0]).reshape(-1,1)
+
         self.Pk_0 = np.array([[0.000, 0 ,0],
                             [0, 0.0000, 0],
                             [0, 0 ,0.000]])
+        self.lm_cov = np.array([[0.1, 0 ,0],
+                            [0, 0.1, 0],
+                            [0, 0 ,0.1]])
         
         self.filter = PEKFSLAM(self.xk_0, self.Pk_0)
 
@@ -46,6 +54,7 @@ class LocalizationNode:
         self.combined_pc = None
 
         self.map_update_interval = 2
+        self.overlap_threshold = 0.1
 
         # For initial guese calculation
         self.previous_pose = self.filter.xk[-3:] 
@@ -69,7 +78,7 @@ class LocalizationNode:
         self.joint_state_sub = rospy.Subscriber(joint_state_topic, JointState, self.joint_state_callback)
         self.gt_sub = rospy.Subscriber("/turtlebot/kobuki/ground_truth", Odometry, self.gt_callback)
         # IMU SUBSCRIBER
-        self.imu_sub = rospy.Subscriber(imu_topic, Imu, self.imu_callback)
+        # self.imu_sub = rospy.Subscriber(imu_topic, Imu, self.imu_callback)
         
 
         #Services
@@ -80,7 +89,7 @@ class LocalizationNode:
 
         
         # Timer
-        rospy.Timer(rospy.Duration(0.05), self.odom_msg_pub)
+        rospy.Timer(rospy.Duration(0.2), self.odom_msg_pub)
         rospy.sleep(1)
         self.initialize_map()
         rospy.Timer(rospy.Duration(self.map_update_interval), self.main_loop)
@@ -102,6 +111,8 @@ class LocalizationNode:
         if data.name[0] == self.left_wheel_name:
             self.left_vel = data.velocity[0]
             self.left_vel_arrived = True
+            # self.right_vel = data.velocity[1]
+            # self.right_vel_arrived = True
 
         if data.name[0] == self.right_wheel_name:
             self.right_vel = data.velocity[0]
@@ -113,7 +124,7 @@ class LocalizationNode:
             self.left_vel_arrived = False
             self.right_vel_arrived = False
 
-            uk, Qk, dt = self.dr.get_input(self.left_vel, self.right_vel) 
+            uk, Qk, dt = self.dr.get_input(self.left_vel, self.right_vel)
             self.filter.dt = dt
             xk_bar, Pk_bar = self.filter.prediction(uk, Qk)
 
@@ -199,6 +210,35 @@ class LocalizationNode:
         rospy.logwarn("Ground Truth: {}".format(res.transform))
         return res
     
+    def get_scan_matching(self, current_pc, target_pc, initial_guess_tf):
+        '''
+        function to call /ndt_matching service
+        '''
+        rospy.logwarn("Calling get_matching_tf...")
+        rospy.wait_for_service('ndt_matching')
+        try:
+            get_matching_tf = rospy.ServiceProxy('ndt_matching', PointCloudTransform)
+            req = PointCloudTransformRequest()
+            req.initial_guese = initial_guess_tf
+            req.target = target_pc
+            req.current = current_pc
+            resp = get_matching_tf(req)
+            # rospy.logwarn("matching: {}".format(resp.transform))
+            
+            dx = resp.transform.translation.x
+            dy = resp.transform.translation.y
+            q = (resp.transform.rotation.x, resp.transform.rotation.y, resp.transform.rotation.z, resp.transform.rotation.w)
+            euler = euler_from_quaternion(q)
+            lm_matching = np.array([dx,dy,euler[2]]).reshape(-1,1)
+
+            lm_matching_cov = self.lm_cov
+            
+
+            return resp.transform, lm_matching, lm_matching_cov
+        except rospy.ServiceException as e:
+            print(f"Service call failed: {e}")
+            return None, None, None
+
         
 
     ##################################################################
@@ -230,9 +270,57 @@ class LocalizationNode:
         if self.filter.need_augment():
             self.map.append(current_pc) # update map
             self.map_flag.append(False)
-            _,_ = self.filter.augment_state() # update state
+            xk_plus,Pk_plus = self.filter.augment_state() # update state
+            new_state = xk_plus[-6:-3,0].reshape(-1,1)  
+            new_state_cov = Pk_plus[-6:-3,-6:-3]
+            
+            # find overlapping scan 
+            overlaped_list = self.find_overlapping(xk_plus, new_state)
+            
+
+            # find laser matching tf for each overlapping scan
+            zlm = np.zeros((0,1))
+            Rlm = np.zeros((0,0))
+            hlm = np.zeros((0,1))
+            Plm = np.zeros((0,0))
+            for i in overlaped_list:
+                
+                target_pc = self.map[i]
+                initial_guess_tf ,initial_guess, initial_guess_cov = self.filter.find_initial_guess(xk_plus[i*3:i*3+3,0].reshape(-1,1),new_state, Pk_plus[i*3:i*3+3,i:i+3], new_state_cov)
+
+                _, scan_matching, scan_matching_cov = self.get_scan_matching(current_pc,target_pc,initial_guess_tf)
+
+                if self.filter.individual_compatable(scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):
+                    zlm = np.block([[zlm], [scan_matching]])
+                    Rlm = scipy.linalg.block_diag(Rlm, scan_matching_cov)
+                    hlm = np.block([[hlm], [initial_guess]])
+                    Plm = scipy.linalg.block_diag(Plm, initial_guess_cov)
+                    self.map_flag[i] = False
+                else:
+                    overlaped_list.pop(i)
+            if len(overlaped_list) > 0:
+                self.filter.update_lm(zlm,Rlm,hlm,overlaped_list)
+                    
+
+
+    def find_overlapping(self,states ,new_state):
+        '''
+        return the index of the overlapping scan in the map
+        '''
+        # for now use distance threshold
+        overlaped_list = []
+        for i in range(0,(states.shape[0]-6)//3):
+            dis = np.linalg.norm(states[i*3:i*3+2,0] - new_state[:2,0])
+            if dis < self.overlap_threshold:
+                overlaped_list.append(i)
+        return overlaped_list
+            
+              
 
     def initialize_map(self):
+        '''
+        Initialize map with first point cloud
+        '''
         while not self.current_pc and  not rospy.is_shutdown():
             rospy.loginfo("Waiting for  first pc2...")
             rospy.sleep(0.1)
@@ -242,22 +330,24 @@ class LocalizationNode:
         self.map_flag.append(False)      
         self.filter.augment_state()
 
-        self.combined_pc = self.transform_pc(current_pc, self.world_frame)
+        # self.combined_pc = self.transform_pc(current_pc, self.world_frame)
     
     ##################################################################
     #### Visualization functions
     ##################################################################
     def publish_map(self,_):
-        for i, m in enumerate(self.map):
-            if not self.map_flag[i]:
-                rospy.loginfo("Merge new pc...")
+        if len(self.map) > 0 and (len(self.map) == (self.filter.xk.shape[0]-3)//3):
+            self.combined_pc = self.transform_pc_from_pose(self.map[0],self.filter.xk[0:3,0].reshape(-1,1) )
+            for i in range(1,len(self.map)):
+                # if not self.map_flag[i]:
+                # rospy.loginfo("Merge new pc...")
                 self.map_flag[i] = True
                 
                 vp = self.filter.xk[i*3:i*3+3,0].reshape(-1,1)
-                new_pc = self.transform_pc_from_pose(m,vp )
+                new_pc = self.transform_pc_from_pose(self.map[i],vp )
                 self.combined_pc = self.merge_pointclouds(self.combined_pc, new_pc)
-        
-        self.combined_pc_pub.publish(self.combined_pc)
+            
+            self.combined_pc_pub.publish(self.combined_pc)
 
     def visualize_states(self,_):
         states = self.filter.xk
@@ -307,7 +397,7 @@ class LocalizationNode:
         state_marker.pose.orientation.y = q[1]
         state_marker.pose.orientation.z = q[2]
         state_marker.pose.orientation.w = q[3]
-        state_marker.scale.x = 0.3
+        state_marker.scale.x = 0.5
         state_marker.scale.y = 0.05
         state_marker.scale.z = 0.05
         r,g,b = self.scale_rgb_by_index(idx)
@@ -344,8 +434,8 @@ class LocalizationNode:
         cov_marker.pose.orientation.y = q[1]
         cov_marker.pose.orientation.z = q[2]
         cov_marker.pose.orientation.w = q[3]
-        cov_marker.scale.x = x_axis_length * 2
-        cov_marker.scale.y = y_axis_length * 2
+        cov_marker.scale.x = x_axis_length * 2 *10
+        cov_marker.scale.y = y_axis_length * 2 *10
         cov_marker.scale.z = 0.01
         r,g,b = self.scale_rgb_by_index(idx)
         cov_marker.color.a = 1.0
@@ -497,6 +587,25 @@ class LocalizationNode:
         
         return r, g, b
     
+    def find_initial_guess(self, previous_pose, current_pose):
+        dis = oplus(ominus(previous_pose), current_pose)
+        # claculate displacement
+        dx = dis[0,0]
+        dy = dis[1,0]
+        dyaw = dis[2,0]
+        q = quaternion_from_euler(0, 0, float(dyaw))
+
+        # service response
+        initial_guese_transform = Transform()
+        initial_guese_transform.translation.x = dx
+        initial_guese_transform.translation.y = dy
+        initial_guese_transform.translation.z = 0
+        initial_guese_transform.rotation.x = q[0]
+        initial_guese_transform.rotation.y = q[1]
+        initial_guese_transform.rotation.z = q[2]
+        initial_guese_transform.rotation.w = q[3]
+
+        return initial_guese_transform
 
 if __name__ == '__main__':
 
