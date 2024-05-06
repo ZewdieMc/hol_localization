@@ -396,7 +396,7 @@ class LocalizationNode:
         '''
         Initialize map with first point cloud
         '''
-        while not self.current_pc and self.gt and  not rospy.is_shutdown():
+        while not self.current_pc and not self.gt and  not rospy.is_shutdown():
             rospy.loginfo("Waiting for  first pc2...")
             rospy.sleep(0.1)
 
