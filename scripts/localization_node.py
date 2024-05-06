@@ -413,7 +413,7 @@ class LocalizationNode:
     ##################################################################
     def publish_map(self,_):
         try:
-            if len(self.map) > 0 and self.filter.xk.shape[0] > 3 and len(self.map) == (self.filter.xk.shape[0]//3)-1:
+            if len(self.map) > 0 and self.filter.xk.shape[0] > 3:
                 xk = self.filter.xk.copy()
                 map = self.map
                 self.combined_pc = self.transform_pc_from_pose(map[0],xk[0:3,0].reshape(-1,1) )
@@ -435,7 +435,7 @@ class LocalizationNode:
             states = self.filter.xk
             covariances = self.filter.Pk
             marker_array_msg = MarkerArray()
-            if len(self.map) > 0 and self.filter.xk.shape[0] > 3 and len(self.map) == (self.filter.xk.shape[0]//3)-1:
+            if len(self.map) > 0 and self.filter.xk.shape[0] > 3 :
                 xk = self.filter.xk.copy()
                 map = self.map
                 for i in range(0, (xk.shape[0]//3)-1): # prooved
