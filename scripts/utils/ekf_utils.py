@@ -25,7 +25,7 @@ def ominus(AxB):
         
     x = -AxB[0] * cos(AxB[2]) - AxB[1] * sin(AxB[2])
     y = AxB[0] * sin(AxB[2]) - AxB[1] * cos(AxB[2])
-    yaw = -AxB[2]
+    yaw = wrap_angle(-AxB[2])
     return np.array([x, y, yaw]).reshape(-1,1)
 
 def J1_oplus(xk_1,uk, dt):

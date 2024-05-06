@@ -42,19 +42,20 @@ class LocalizationNode:
         self.Pk_0 = np.array([[0.000, 0 ,0],
                             [0, 0.0000, 0],
                             [0, 0 ,0.000]])
-        self.lm_cov = np.array([[0.1, 0 ,0],
-                            [0, 0.1, 0],
-                            [0, 0 ,0.1]])
+        self.lm_cov = np.array([[0.001, 0 ,0],
+                            [0, 0.001, 0],
+                            [0, 0 ,0.001]])
         
         self.filter = PEKFSLAM(self.xk_0, self.Pk_0)
 
         self.map = [] # contain [PoseCovStamped, PC2]
         self.map_flag = [] # flag for combining
+        self.map_gt = [] # for testing only
         self.current_pc = None
         self.combined_pc = None
 
-        self.map_update_interval = 2
-        self.overlap_threshold = 0.1
+        self.map_update_interval = 3
+        self.overlap_threshold = 0.5
 
         # For initial guese calculation
         self.previous_pose = self.filter.xk[-3:] 
@@ -78,8 +79,8 @@ class LocalizationNode:
         self.joint_state_sub = rospy.Subscriber(joint_state_topic, JointState, self.joint_state_callback)
         self.gt_sub = rospy.Subscriber("/turtlebot/kobuki/ground_truth", Odometry, self.gt_callback)
         # IMU SUBSCRIBER
-        # self.imu_sub = rospy.Subscriber(imu_topic, Imu, self.imu_callback)
-        
+        self.imu_sub = rospy.Subscriber(imu_topic, Imu, self.imu_callback)
+
 
         #Services
         # Initial Guese service
@@ -239,6 +240,29 @@ class LocalizationNode:
             print(f"Service call failed: {e}")
             return None, None, None
 
+    def get_gt_matching(self, previous_gt, current_gt):
+        
+
+        dis = oplus(ominus(previous_gt), current_gt)
+        # claculate displacement
+        dx = dis[0,0]
+        dy = dis[1,0]
+        dyaw = wrap_angle(dis[2,0])
+        q = quaternion_from_euler(0, 0, float(dyaw))
+
+        # service response
+        gt_tf = Transform()
+        gt_tf.translation.x = dx
+        gt_tf.translation.y = dy
+        gt_tf.translation.z = 0
+        gt_tf.rotation.x = q[0]
+        gt_tf.rotation.y = q[1]
+        gt_tf.rotation.z = q[2]
+        gt_tf.rotation.w = q[3]
+
+        gt =  np.array([dx,dy,dyaw]).reshape(-1,1)
+        gt_cov = self.lm_cov
+        return gt_tf, gt , gt_cov
         
 
     ##################################################################
@@ -268,9 +292,57 @@ class LocalizationNode:
         current_pc = self.current_pc
 
         if self.filter.need_augment():
+            xk_plus,Pk_plus = self.filter.augment_state() # update state
+
+            current_pc = self.current_pc
             self.map.append(current_pc) # update map
             self.map_flag.append(False)
+            self.map_gt.append(self.gt)
+
+            new_state = xk_plus[-6:-3,0].reshape(-1,1)  
+            new_state_cov = Pk_plus[-6:-3,-6:-3]
+            
+            # find overlapping scan 
+            overlaped_list = self.find_overlapping(xk_plus, new_state)
+
+            # find laser matching tf for each overlapping scan
+            zlm = np.zeros((0,1))
+            Rlm = np.zeros((0,0))
+            hlm = np.zeros((0,1))
+            Plm = np.zeros((0,0))
+            for i in overlaped_list:
+                hypo_state = xk_plus[i*3:i*3+3,0].reshape(-1,1)
+                target_pc = self.map[i]
+                
+                initial_guess_tf ,initial_guess, initial_guess_cov = self.filter.find_initial_guess(new_state,hypo_state, new_state_cov, Pk_plus[i*3:i*3+3,i:i+3])
+                _, scan_matching, scan_matching_cov = self.get_scan_matching(target_pc,current_pc,initial_guess_tf)
+
+                if self.filter.individual_compatable(scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):
+                    zlm = np.block([[zlm], [scan_matching]])
+                    Rlm = scipy.linalg.block_diag(Rlm, scan_matching_cov)
+                    hlm = np.block([[hlm], [initial_guess]])
+                    Plm = scipy.linalg.block_diag(Plm, initial_guess_cov)
+                    self.map_flag[i] = False
+                else:
+                    overlaped_list.pop(i)
+            if len(overlaped_list) > 0:
+                self.filter.update_lm(zlm,Rlm,hlm,overlaped_list)
+
+    def main_loop_gt(self,_):
+        '''
+        Main PEKF update loop
+        '''
+        
+        
+        if self.filter.need_augment():
+            
             xk_plus,Pk_plus = self.filter.augment_state() # update state
+
+            current_pc = self.current_pc
+            self.map.append(current_pc) # update map
+            self.map_flag.append(False)
+            self.map_gt.append(self.gt)
+
             new_state = xk_plus[-6:-3,0].reshape(-1,1)  
             new_state_cov = Pk_plus[-6:-3,-6:-3]
             
@@ -286,9 +358,10 @@ class LocalizationNode:
             for i in overlaped_list:
                 
                 target_pc = self.map[i]
-                initial_guess_tf ,initial_guess, initial_guess_cov = self.filter.find_initial_guess(xk_plus[i*3:i*3+3,0].reshape(-1,1),new_state, Pk_plus[i*3:i*3+3,i:i+3], new_state_cov)
+                hypo_state = xk_plus[i*3:i*3+3,0].reshape(-1,1)
+                initial_guess_tf ,initial_guess, initial_guess_cov = self.filter.find_initial_guess(new_state,hypo_state, new_state_cov,Pk_plus[i*3:i*3+3,i:i+3])
 
-                _, scan_matching, scan_matching_cov = self.get_scan_matching(current_pc,target_pc,initial_guess_tf)
+                _, scan_matching, scan_matching_cov = self.get_gt_matching(self.map_gt[-1],self.map_gt[i])
 
                 if self.filter.individual_compatable(scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):
                     zlm = np.block([[zlm], [scan_matching]])
@@ -308,6 +381,7 @@ class LocalizationNode:
         return the index of the overlapping scan in the map
         '''
         # for now use distance threshold
+        rospy.logwarn("Vp: {}".format(((states.shape[0])//3)-1))
         overlaped_list = []
         for i in range(0,(states.shape[0]-6)//3):
             dis = np.linalg.norm(states[i*3:i*3+2,0] - new_state[:2,0])
@@ -327,7 +401,8 @@ class LocalizationNode:
 
         current_pc = self.current_pc
         self.map.append(current_pc)      
-        self.map_flag.append(False)      
+        self.map_flag.append(False)
+        self.map_gt.append(self.gt)      
         self.filter.augment_state()
 
         # self.combined_pc = self.transform_pc(current_pc, self.world_frame)
@@ -336,47 +411,57 @@ class LocalizationNode:
     #### Visualization functions
     ##################################################################
     def publish_map(self,_):
-        if len(self.map) > 0 and (len(self.map) == (self.filter.xk.shape[0]-3)//3):
-            self.combined_pc = self.transform_pc_from_pose(self.map[0],self.filter.xk[0:3,0].reshape(-1,1) )
-            for i in range(1,len(self.map)):
-                # if not self.map_flag[i]:
-                # rospy.loginfo("Merge new pc...")
-                self.map_flag[i] = True
+        try:
+            if len(self.map) > 0 and self.filter.xk.shape[0] > 3 and len(self.map) == (self.filter.xk.shape[0]//3)-1:
+                xk = self.filter.xk.copy()
+                map = self.map
+                self.combined_pc = self.transform_pc_from_pose(map[0],xk[0:3,0].reshape(-1,1) )
+                for i in range(1,(xk.shape[0]//3)-1):
+                    # if not map_flag[i]:
+                    # rospy.loginfo("Merge new pc...")
+                    # map_flag[i] = True
+                    
+                    vp = xk[i*3:i*3+3,0].reshape(-1,1)
+                    new_pc = self.transform_pc_from_pose(map[i],vp )
+                    self.combined_pc = self.merge_pointclouds(self.combined_pc, new_pc)
                 
-                vp = self.filter.xk[i*3:i*3+3,0].reshape(-1,1)
-                new_pc = self.transform_pc_from_pose(self.map[i],vp )
-                self.combined_pc = self.merge_pointclouds(self.combined_pc, new_pc)
-            
-            self.combined_pc_pub.publish(self.combined_pc)
+                self.combined_pc_pub.publish(self.combined_pc)
+        except Exception as e:
+            rospy.logerr(e)
 
     def visualize_states(self,_):
-        states = self.filter.xk
-        covariances = self.filter.Pk
-        marker_array_msg = MarkerArray()
-        if states.shape[0] > 3:
-            for i in range(0, states.shape[0]-3,3): # prooved
-                state = states[i:i+3,0]
-                cov   =  covariances[i:i+2, i:i+2]
+        try:
+            states = self.filter.xk
+            covariances = self.filter.Pk
+            marker_array_msg = MarkerArray()
+            if len(self.map) > 0 and self.filter.xk.shape[0] > 3 and len(self.map) == (self.filter.xk.shape[0]//3)-1:
+                xk = self.filter.xk.copy()
+                map = self.map
+                for i in range(0, (xk.shape[0]//3)-1): # prooved
+                    state = states[i*3:i*3+3,0]
+                    cov   =  covariances[i*3:i*3+2, i*3:i*3+2]
 
-                state_marker = self.create_state_marker(state,i)
-                cov_marker = self.create_cov_marker(cov,state,i)
+                    state_marker = self.create_state_marker(state,i)
+                    cov_marker = self.create_cov_marker(cov,state,i)
 
-                marker_array_msg.markers.append(state_marker)
-                marker_array_msg.markers.append(cov_marker)
+                    marker_array_msg.markers.append(state_marker)
+                    marker_array_msg.markers.append(cov_marker)
 
-                # cov_current = self.filter.Pk[-3:-1,-3:-1]
-                # print(cov_current)
-                # poscov = self.get_robot_pose_cov(self.filter.xk, self.filter.Pk)
-                # print(poscov.pose.covariance)
-                # cov_current_marker = self.create_cov_marker(cov_current,state,i)
-                # cov_current_marker.color.r = 0
-                # cov_current_marker.color.g = 0
-                # cov_current_marker.color.b = 1
-                # cov_current_marker.color.a = 0.5
-                # marker_array_msg.markers.append(cov_current_marker)
+                    # cov_current = self.filter.Pk[-3:-1,-3:-1]
+                    # print(cov_current)
+                    # poscov = self.get_robot_pose_cov(self.filter.xk, self.filter.Pk)
+                    # print(poscov.pose.covariance)
+                    # cov_current_marker = self.create_cov_marker(cov_current,state,i)
+                    # cov_current_marker.color.r = 0
+                    # cov_current_marker.color.g = 0
+                    # cov_current_marker.color.b = 1
+                    # cov_current_marker.color.a = 0.5
+                    # marker_array_msg.markers.append(cov_current_marker)
 
-        
-        self.visualize_pub.publish(marker_array_msg)
+            
+            self.visualize_pub.publish(marker_array_msg)
+        except Exception as e:
+            rospy.logerr(e)
 
         
 
@@ -420,12 +505,15 @@ class LocalizationNode:
         cov_marker.pose.position.x = state[0]
         cov_marker.pose.position.y = state[1]
         cov_marker.pose.position.z = 0
+        if cov[1,0] <= 0.0001 and  cov[1,0] >= -0.0001:
+            cov[1,0] = 0.
+        if cov[0,1] <= 0.0001 and  cov[1,0] >= -0.0001:
+            cov[0,1] = 0.000
         eigenvalues, eigenvectors = np.linalg.eig(cov)
 
         # Find major and minor axes lengths
         x_axis_length = np.sqrt(eigenvalues[0])
         y_axis_length = np.sqrt(eigenvalues[1])
-
         # Find orientation of the ellipse
         orientation = np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0])
         q = quaternion_from_euler(0, 0, orientation)

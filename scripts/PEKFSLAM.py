@@ -89,8 +89,10 @@ class PEKFSLAM:
             
             Hk[i*3:i*3+3, hypo*3:hypo*3+3] = J2_o
             Hk[i*3:i*3+3, -3:] = J1_o @ J_omi
-         
+            print("J2:", J2_o)
+            print("J1:",J1_o @ J_omi)
 
+        print(Hk)
         zk_h = zlm - hlm
         for i in range(zk_h.shape[0]):
             if i+1 % 3 == 0:
@@ -102,7 +104,7 @@ class PEKFSLAM:
 
 
         xk,Pk = self.update(zlm, Rlm, self.xk, self.Pk, Hk, Vk, hlm, zk_h)
-
+        rospy.logerr("state change: {}".format(xk - self.xk))
         self.xk = xk
         self.Pk = Pk
 
@@ -114,8 +116,8 @@ class PEKFSLAM:
         '''
         Augment current pose as a new state and also add covariance
         '''
-        xk = self.xk
-        Pk = self.Pk
+        xk = self.xk.copy()
+        Pk = self.Pk.copy()
 
         xk_plus = np.block([[xk],[xk[-3:,0].reshape(-1,1)]])
 
@@ -157,7 +159,7 @@ class PEKFSLAM:
         # claculate displacement
         dx = dis[0,0]
         dy = dis[1,0]
-        dyaw = dis[2,0]
+        dyaw = wrap_angle(dis[2,0])
         q = quaternion_from_euler(0, 0, float(dyaw))
 
         initial_guess = np.array([dx,dy,dyaw]).reshape(-1,1)
