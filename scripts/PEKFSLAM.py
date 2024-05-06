@@ -82,29 +82,25 @@ class PEKFSLAM:
         
         J2_o = J2_oplus_displacement(current_state)
         J_omi = J_ominus(current_state)
-        print(hypothesis)
         for i,hypo in enumerate(hypothesis):
             hypo_state = self.xk[hypo*3:hypo*3+3,0].reshape(-1,1)
             J1_o = J1_oplus_displacement(ominus(current_state),hypo_state )
             
             Hk[i*3:i*3+3, hypo*3:hypo*3+3] = J2_o
             Hk[i*3:i*3+3, -3:] = J1_o @ J_omi
-            print("J2:", J2_o)
-            print("J1:",J1_o @ J_omi)
 
-        print(Hk)
         zk_h = zlm - hlm
         for i in range(zk_h.shape[0]):
             if i+1 % 3 == 0:
                 zk_h[i,0] = wrap_angle(zk_h[i])
         
-        rospy.logerr("zlm: {}".format(zlm))
-        rospy.logerr("hlm: {}".format(hlm))
-        rospy.logerr("zk_h: {}".format(zk_h))
+        # rospy.logerr("zlm: {}".format(zlm))
+        # rospy.logerr("hlm: {}".format(hlm))
+        # rospy.logerr("zk_h: {}".format(zk_h))
 
 
         xk,Pk = self.update(zlm, Rlm, self.xk, self.Pk, Hk, Vk, hlm, zk_h)
-        rospy.logerr("state change: {}".format(xk - self.xk))
+        # rospy.logerr("state change: {}".format(xk - self.xk))
         self.xk = xk
         self.Pk = Pk
 

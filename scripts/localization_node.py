@@ -53,6 +53,7 @@ class LocalizationNode:
         self.map_gt = [] # for testing only
         self.current_pc = None
         self.combined_pc = None
+        self.gt = None
 
         self.map_update_interval = 3
         self.overlap_threshold = 0.5
@@ -342,14 +343,14 @@ class LocalizationNode:
             self.map.append(current_pc) # update map
             self.map_flag.append(False)
             self.map_gt.append(self.gt)
-
             new_state = xk_plus[-6:-3,0].reshape(-1,1)  
             new_state_cov = Pk_plus[-6:-3,-6:-3]
             
             # find overlapping scan 
             overlaped_list = self.find_overlapping(xk_plus, new_state)
             
-
+            if len(self.map) != (self.filter.xk.shape[0]//3)-1:
+                rospy.logerr("state is unbalncaned")
             # find laser matching tf for each overlapping scan
             zlm = np.zeros((0,1))
             Rlm = np.zeros((0,0))
@@ -381,7 +382,7 @@ class LocalizationNode:
         return the index of the overlapping scan in the map
         '''
         # for now use distance threshold
-        rospy.logwarn("Vp: {}".format(((states.shape[0])//3)-1))
+        # rospy.logwarn("Vp: {}".format(((states.shape[0])//3)-1))
         overlaped_list = []
         for i in range(0,(states.shape[0]-6)//3):
             dis = np.linalg.norm(states[i*3:i*3+2,0] - new_state[:2,0])
@@ -395,7 +396,7 @@ class LocalizationNode:
         '''
         Initialize map with first point cloud
         '''
-        while not self.current_pc and  not rospy.is_shutdown():
+        while not self.current_pc and self.gt and  not rospy.is_shutdown():
             rospy.loginfo("Waiting for  first pc2...")
             rospy.sleep(0.1)
 
