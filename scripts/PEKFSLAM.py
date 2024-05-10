@@ -176,5 +176,45 @@ class PEKFSLAM:
         return initial_guess_transform, initial_guess, initial_guess_cov
     
     def individual_compatable(self,scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):
+        
         return True
+        # alpha = 0.9
+        # dof = 2
+        
+        # D2_ij = self.SquaredMahalanobisDistance(initial_guess, initial_guess_cov, scan_matching, scan_matching_cov)
+        # Xij = scipy.stats.chi2.ppf(alpha, dof)
+        # isCompatible = bool(D2_ij < Xij)
+        # print("Compatible: ",isCompatible)
+        # return isCompatible
+    
+    def SquaredMahalanobisDistance(self, hfj, Pfj, zfi, Rfi):
+        """
+        Computes the squared Mahalanobis distance between the expected feature observation :math:`hf_j` and the feature observation :math:`z_{f_i}`.
+
+        :param hfj: expected feature observation
+        :param Pfj: expected feature observation covariance
+        :param zfi: feature observation
+        :param Rfi: feature observation covariance
+        :return: Squared Mahalanobis distance between the expected feature observation :math:`hf_j` and the feature observation :math:`z_{f_i}`
+        """
+
+        # TODO: To be completed by the student
+        vij = zfi - hfj
+        Sij = Rfi + Pfj
+        D2_ij = vij.T @  np.linalg.inv(Sij) @ vij
+        return D2_ij
+
+    def IndividualCompatibility(self, D2_ij, dof, alpha):
+        """
+        Computes the individual compatibility test for the squared Mahalanobis distance :math:`D^2_{ij}`. The test is performed using the Chi-Square distribution with :math:`dof` degrees of freedom and a significance level :math:`\\alpha`.
+
+        :param D2_ij: squared Mahalanobis distance
+        :param dof: number of degrees of freedom
+        :param alpha: confidence level
+        :return: bolean value indicating if the Mahalanobis distance is smaller than the threshold defined by the confidence level
+        """
+        # TODO: To be completed by the student
+        Xij = scipy.stats.chi2.ppf(alpha, dof)
+        isCompatible = bool(D2_ij < Xij)
+        return isCompatible
         
