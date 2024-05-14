@@ -43,7 +43,7 @@ int registeration ()
 {
   pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ>);
   pcl::ApproximateVoxelGrid<pcl::PointXYZ> approximate_voxel_filter;
-  approximate_voxel_filter.setLeafSize (0.05, 0.05, 0.05);
+  approximate_voxel_filter.setLeafSize (0.2, 0.2, 0.2);  //0.05
   approximate_voxel_filter.setInputCloud (input_cloud);
   approximate_voxel_filter.filter (*filtered_cloud);
   std::cout << "Filtered cloud contains " << filtered_cloud->size ()
@@ -56,9 +56,9 @@ int registeration ()
   // Setting minimum transformation difference for termination condition.
   ndt.setTransformationEpsilon (0.00001);
   // Setting maximum step size for More-Thuente line search.
-  ndt.setStepSize (0.1);
+  ndt.setStepSize (0.1); //0.1
   //Setting Resolution of NDT grid structure (VoxelGridCovariance).
-  ndt.setResolution (1);
+  ndt.setResolution (2); //
 
   // Setting max number of registration iterations.
   ndt.setMaximumIterations (35);

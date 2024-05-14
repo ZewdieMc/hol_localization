@@ -24,8 +24,8 @@ class DeadReckoning:
         self.Wr = Wr
 
         # noise in encoder's velocity
-        self.Qw = np.array([[10, 0],
-                            [0, 10]])
+        self.Qw = np.array([[50**2, 0],
+                            [0, 50**2]])
         
 
         self.last_time = rospy.Time.now()

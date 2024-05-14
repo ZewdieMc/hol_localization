@@ -70,8 +70,11 @@ class PEKFSLAM:
         zk_h =  wrap_angle(zk-h)
         xk,Pk = self.update(zk, Rk, self.xk, self.Pk, Hk, Vk, h, zk_h)
 
-        self.xk = xk
-        self.Pk = Pk
+        if self.xk.shape[0] == xk.shape[0]: # state unbalanced bug
+            self.xk = xk
+            self.Pk = Pk
+        else:
+            rospy.logerr("state is unbalncaned in imu update")
 
     def update_lm(self, zlm, Rlm, hlm, hypothesis):
         rospy.logwarn("Update Laser Matching!!!!")
@@ -79,15 +82,21 @@ class PEKFSLAM:
         Vk = np.eye(zlm.shape[0])
 
         current_state = self.xk[-3:,0].reshape(-1,1)
+        current_vp = self.xk[-6:-3:,0].reshape(-1,1)
+
         
         J2_o = J2_oplus_displacement(current_state)
         J_omi = J_ominus(current_state)
         for i,hypo in enumerate(hypothesis):
             hypo_state = self.xk[hypo*3:hypo*3+3,0].reshape(-1,1)
-            J1_o = J1_oplus_displacement(ominus(current_state),hypo_state )
+            J1_o_1 = J1_oplus_displacement(ominus(current_state),hypo_state )
+            J1_o_2 = J1_oplus_displacement(ominus(current_vp),hypo_state )
+
             
             Hk[i*3:i*3+3, hypo*3:hypo*3+3] = J2_o
-            Hk[i*3:i*3+3, -3:] = J1_o @ J_omi
+            #Hk[i*3:i*3+3, -3:] = J1_o_1 @ J_omi
+            Hk[i*3:i*3+3, -6:-3] = J1_o_2 @ J_omi
+
 
         zk_h = zlm - hlm
         for i in range(zk_h.shape[0]):

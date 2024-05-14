@@ -21,9 +21,11 @@ from sensor_msgs.msg import PointCloud2
 from sensor_msgs import point_cloud2
 from visualization_msgs.msg import Marker, MarkerArray
 import scipy
-
+import rosparam
 class LocalizationNode:
-    def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.235, Wr=0.035):
+    def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.235, Wr=0.033):
+        self.map_enable = rospy.get_param("enable_map",default="True")
+
         self.scan_frame = "turtlebot/kobuki/rplidar"
         self.bf_frame = "turtlebot/kobuki/base_footprint"
         self.world_frame = "world_ned"
@@ -37,27 +39,29 @@ class LocalizationNode:
         self.right_vel_arrived = False
         
         # Filter Module
-        # self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
-        self.xk_0 = np.array([0.0, 0.0, 0.0]).reshape(-1,1)
+        self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
+        # self.xk_0 = np.array([0.0, 0.0, 0.0]).reshape(-1,1)
 
         self.Pk_0 = np.array([[0.000, 0 ,0],
                             [0, 0.0000, 0],
                             [0, 0 ,0.000]])
-        self.lm_cov = np.array([[0.001, 0 ,0],
-                            [0, 0.001, 0],
-                            [0, 0 ,0.001]])
+        self.lm_cov = np.array([[0.05**2, 0 ,0],
+                            [0, 0.05**2, 0],
+                            [0, 0 ,0.005**2]])
         
         self.filter = PEKFSLAM(self.xk_0, self.Pk_0)
 
         self.map = [] # contain [PoseCovStamped, PC2]
         self.map_flag = [] # flag for combining
+        self.map_state = []
         self.map_gt = [] # for testing only
         self.current_pc = None
+        self.prediction_pc = None
         self.combined_pc = None
         self.gt = None
 
-        self.map_update_interval = 3
-        self.overlap_threshold = 0.7
+        self.map_update_interval = 4
+        self.overlap_threshold = 1.0
 
         # For initial guese calculation
         self.previous_pose = self.filter.xk[-3:] 
@@ -72,6 +76,8 @@ class LocalizationNode:
         # ODOM PUBLISHER
         self.odom_pub = rospy.Publisher(odom_topic, Odometry, queue_size=1)
         self.combined_pc_pub = rospy.Publisher("/combined_pc", PointCloud2, queue_size=1)
+        self.prediction_pc_pub = rospy.Publisher("/prediction_pc", PointCloud2, queue_size=1)
+
         self.visualize_pub = rospy.Publisher("~states", MarkerArray, queue_size=1)
 
         # Subscriber
@@ -96,10 +102,13 @@ class LocalizationNode:
         self.initialize_map()
         rospy.Timer(rospy.Duration(0.01), self.odom_msg_pub)
         rospy.sleep(1)
+
+        if self.map_enable == "True":
+            rospy.loginfo("Map is enabled")
         
-        # rospy.Timer(rospy.Duration(self.map_update_interval), self.main_loop)
-        # rospy.Timer(rospy.Duration(0.5), self.publish_map)
-        # rospy.Timer(rospy.Duration(0.5), self.visualize_states)
+            rospy.Timer(rospy.Duration(self.map_update_interval), self.main_loop)
+            rospy.Timer(rospy.Duration(0.5), self.publish_map)
+            rospy.Timer(rospy.Duration(0.5), self.visualize_states)
         
 
 
@@ -116,8 +125,8 @@ class LocalizationNode:
         if data.name[0] == self.left_wheel_name:
             self.left_vel = data.velocity[0]
             self.left_vel_arrived = True
-            self.right_vel = data.velocity[1]
-            self.right_vel_arrived = True
+            # self.right_vel = data.velocity[1]
+            # self.right_vel_arrived = True
 
         if data.name[0] == self.right_wheel_name:
             self.right_vel = data.velocity[0]
@@ -140,7 +149,7 @@ class LocalizationNode:
         q = [data.orientation.x,data.orientation.y,data.orientation.z,data.orientation.w]
         euler = tf.transformations.euler_from_quaternion(q)
         
-        zk = np.array([wrap_angle(-euler[2])]).reshape(-1,1)
+        zk = np.array([wrap_angle(euler[2])]).reshape(-1,1)
         Rk = np.array([0.1]).reshape(-1,1)
 
         self.filter.update_imu(zk,Rk)
@@ -158,6 +167,7 @@ class LocalizationNode:
         '''
         # Transform point cloud to reference with base_footprint
         pc = self.transform_pc(data, self.bf_frame)
+        pc = data
         self.current_pc = pc 
 
         self.current_timestamp = data.header.stamp
@@ -292,7 +302,7 @@ class LocalizationNode:
         # ), odom.child_frame_id, odom.header.frame_id)
         tf_msg = TransformStamped()
         tf_msg.header.frame_id = self.world_frame
-        tf_msg.header.stamp = self.current_timestamp
+        tf_msg.header.stamp = rospy.Time.now()
         tf_msg.child_frame_id = self.bf_frame
 
         tf_msg.transform.translation.x = float(self.filter.xk[-3, 0])
@@ -303,6 +313,37 @@ class LocalizationNode:
         tf_msg.transform.rotation.z = q[2]
         tf_msg.transform.rotation.w = q[3]
         self.tf_bc.sendTransform(tf_msg)
+    
+    def odom_msg_gt_pub(self,_):
+        '''
+        Publish /odom and TF using current state vector
+        '''
+        odom = Odometry()
+        odom.header.stamp = self.current_timestamp
+        odom.header.frame_id = self.world_frame
+        odom.child_frame_id = self.bf_frame
+
+        odom.pose = self.get_robot_pose_cov(self.filter.xk, self.filter.Pk).pose
+
+        self.odom_pub.publish(odom)
+
+        q = quaternion_from_euler(0, 0, float(self.gt[-1, 0]))
+        # tf.TransformBroadcaster().sendTransform((float(self.gt[-3, 0]), float(self.gt[-2, 0]), 0.0), q, rospy.Time.now(
+        # ), odom.child_frame_id, odom.header.frame_id)
+        tf_msg = TransformStamped()
+        tf_msg.header.frame_id = self.world_frame
+        tf_msg.header.stamp = rospy.Time.now()
+        tf_msg.child_frame_id = self.bf_frame
+
+        tf_msg.transform.translation.x = float(self.gt[-3, 0])
+        tf_msg.transform.translation.y = float(self.gt[-2, 0])
+        tf_msg.transform.translation.z = 0
+        tf_msg.transform.rotation.x = q[0]
+        tf_msg.transform.rotation.y = q[1]
+        tf_msg.transform.rotation.z = q[2]
+        tf_msg.transform.rotation.w = q[3]
+        self.tf_bc.sendTransform(tf_msg)
+
 
     def main_loop(self,_):
         '''
@@ -322,11 +363,13 @@ class LocalizationNode:
             new_state = xk_plus[-6:-3,0].reshape(-1,1)  
             new_state_cov = Pk_plus[-6:-3,-6:-3]
             
+            self.map_state.append(new_state)
+
             # find overlapping scan 
             overlaped_list = self.find_overlapping(xk_plus, new_state)
 
             if len(self.map) != (self.filter.xk.shape[0]//3)-1:
-                rospy.logerr("state is unbalncaned")
+                rospy.logerr("state is unbalncaned xk:{}, map:{}".format((self.filter.xk.shape[0]//3)-1, len(self.map)))
 
             # find laser matching tf for each overlapping scan
             zlm = np.zeros((0,1))
@@ -418,7 +461,7 @@ class LocalizationNode:
         '''
         Initialize map with first point cloud
         '''
-        while not self.current_pc and not self.gt and  not rospy.is_shutdown():
+        while not self.current_pc  and  not rospy.is_shutdown():
             rospy.loginfo("Waiting for  first pc2...")
             rospy.sleep(0.1)
 
@@ -427,6 +470,8 @@ class LocalizationNode:
         self.map_flag.append(False)
         self.map_gt.append(self.gt)      
         self.filter.augment_state()
+        self.map_state.append(self.filter.xk[-6:-3,0].reshape(-1,1))
+
 
         # self.combined_pc = self.transform_pc(current_pc, self.world_frame)
     
@@ -439,16 +484,23 @@ class LocalizationNode:
                 xk = self.filter.xk.copy()
                 map = self.map
                 self.combined_pc = self.transform_pc_from_pose(map[0],xk[0:3,0].reshape(-1,1) )
+                self.prediction_pc = self.transform_pc_from_pose(map[0],self.map_state[0]) 
+
                 for i in range(1,(xk.shape[0]//3)-1):
                     # if not map_flag[i]:
                     # rospy.loginfo("Merge new pc...")
                     # map_flag[i] = True
                     
+                    new_prediction_pc = self.transform_pc_from_pose(map[i],self.map_state[i]) 
+                    self.prediction_pc = self.merge_pointclouds(self.prediction_pc ,new_prediction_pc)
+
+
                     vp = xk[i*3:i*3+3,0].reshape(-1,1)
                     new_pc = self.transform_pc_from_pose(map[i],vp )
                     self.combined_pc = self.merge_pointclouds(self.combined_pc, new_pc)
                 
                 self.combined_pc_pub.publish(self.combined_pc)
+                self.prediction_pc_pub.publish(self.prediction_pc)
         except Exception as e:
             rospy.logerr(e)
 
@@ -545,8 +597,8 @@ class LocalizationNode:
         cov_marker.pose.orientation.y = q[1]
         cov_marker.pose.orientation.z = q[2]
         cov_marker.pose.orientation.w = q[3]
-        cov_marker.scale.x = x_axis_length * 2 *10
-        cov_marker.scale.y = y_axis_length * 2 *10
+        cov_marker.scale.x = x_axis_length * 2 
+        cov_marker.scale.y = y_axis_length * 2 
         cov_marker.scale.z = 0.01
         r,g,b = self.scale_rgb_by_index(idx)
         cov_marker.color.a = 1.0
@@ -722,7 +774,7 @@ class LocalizationNode:
 if __name__ == '__main__':
 
     rospy.init_node('localization')
-    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu_data","/cloud_in")
+    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu","/cloud_in")
     rospy.loginfo("Localization node started")
 
     rospy.spin()
