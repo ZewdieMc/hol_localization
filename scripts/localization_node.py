@@ -23,7 +23,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 import scipy
 import rosparam
 class LocalizationNode:
-    def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.235, Wr=0.033):
+    def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.235, Wr=0.035):
         self.map_enable = rospy.get_param("enable_map",default="True")
 
         self.scan_frame = "turtlebot/kobuki/rplidar"
@@ -40,7 +40,7 @@ class LocalizationNode:
         
         # Filter Module
         self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
-        # self.xk_0 = np.array([0.0, 0.0, 0.0]).reshape(-1,1)
+        #self.xk_0 = np.array([0.0, 0.0,0.0]).reshape(-1,1)
 
         self.Pk_0 = np.array([[0.000, 0 ,0],
                             [0, 0.0000, 0],
@@ -61,7 +61,7 @@ class LocalizationNode:
         self.gt = None
 
         self.map_update_interval = 4
-        self.overlap_threshold = 1.0
+        self.overlap_threshold = 1
 
         # For initial guese calculation
         self.previous_pose = self.filter.xk[-3:] 
@@ -97,10 +97,12 @@ class LocalizationNode:
         self.gt_srv = rospy.Service('get_gt', OdomTransform, self.handle_get_gt)
 
         self.tf_bc = tf2_ros.TransformBroadcaster()
-        
+
+        rospy.sleep(5)
+        rospy.Timer(rospy.Duration(0.01), self.odom_msg_pub)
+        rospy.sleep(5)
         # Timer
         self.initialize_map()
-        rospy.Timer(rospy.Duration(0.01), self.odom_msg_pub)
         rospy.sleep(1)
 
         if self.map_enable == "True":
@@ -125,8 +127,8 @@ class LocalizationNode:
         if data.name[0] == self.left_wheel_name:
             self.left_vel = data.velocity[0]
             self.left_vel_arrived = True
-            # self.right_vel = data.velocity[1]
-            # self.right_vel_arrived = True
+            self.right_vel = data.velocity[1]
+            self.right_vel_arrived = True
 
         if data.name[0] == self.right_wheel_name:
             self.right_vel = data.velocity[0]
@@ -149,7 +151,7 @@ class LocalizationNode:
         q = [data.orientation.x,data.orientation.y,data.orientation.z,data.orientation.w]
         euler = tf.transformations.euler_from_quaternion(q)
         
-        zk = np.array([wrap_angle(euler[2])]).reshape(-1,1)
+        zk = np.array([wrap_angle(-euler[2])]).reshape(-1,1)
         Rk = np.array([0.1]).reshape(-1,1)
 
         self.filter.update_imu(zk,Rk)
@@ -167,7 +169,7 @@ class LocalizationNode:
         '''
         # Transform point cloud to reference with base_footprint
         pc = self.transform_pc(data, self.bf_frame)
-        pc = data
+        # pc = data
         self.current_pc = pc 
 
         self.current_timestamp = data.header.stamp
@@ -289,7 +291,7 @@ class LocalizationNode:
         Publish /odom and TF using current state vector
         '''
         odom = Odometry()
-        odom.header.stamp = self.current_timestamp
+        odom.header.stamp = self.current_timestamp 
         odom.header.frame_id = self.world_frame
         odom.child_frame_id = self.bf_frame
 
@@ -302,7 +304,7 @@ class LocalizationNode:
         # ), odom.child_frame_id, odom.header.frame_id)
         tf_msg = TransformStamped()
         tf_msg.header.frame_id = self.world_frame
-        tf_msg.header.stamp = rospy.Time.now()
+        tf_msg.header.stamp = self.current_timestamp
         tf_msg.child_frame_id = self.bf_frame
 
         tf_msg.transform.translation.x = float(self.filter.xk[-3, 0])
@@ -653,7 +655,7 @@ class LocalizationNode:
     
     def transform_pc_from_pose(self, pc_msg, pose):
         transform = TransformStamped()
-        transform.header.stamp = rospy.Time.now()
+        transform.header.stamp = self.current_timestamp
         transform.header.frame_id = self.world_frame
         transform.child_frame_id = self.bf_frame
         transform.transform.translation.x = pose[0,0]
@@ -774,7 +776,7 @@ class LocalizationNode:
 if __name__ == '__main__':
 
     rospy.init_node('localization')
-    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu","/cloud_in")
+    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu_data","/cloud_in")
     rospy.loginfo("Localization node started")
 
     rospy.spin()

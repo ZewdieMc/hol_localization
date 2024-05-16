@@ -85,8 +85,8 @@ class PEKFSLAM:
         current_vp = self.xk[-6:-3:,0].reshape(-1,1)
 
         
-        J2_o = J2_oplus_displacement(current_state)
-        J_omi = J_ominus(current_state)
+        J2_o = J2_oplus_displacement(current_vp)
+        J_omi = J_ominus(current_vp)
         for i,hypo in enumerate(hypothesis):
             hypo_state = self.xk[hypo*3:hypo*3+3,0].reshape(-1,1)
             J1_o_1 = J1_oplus_displacement(ominus(current_state),hypo_state )
