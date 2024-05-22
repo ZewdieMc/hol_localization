@@ -39,17 +39,23 @@ class LocalizationNode:
         self.right_vel_arrived = False
         
         # Filter Module
-        self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
-        #self.xk_0 = np.array([0.0, 0.0,0.0]).reshape(-1,1)
+        # self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
+        self.xk_0 = np.array([0.0, 0.0,0.0]).reshape(-1,1)
 
         self.Pk_0 = np.array([[0.000, 0 ,0],
                             [0, 0.0000, 0],
                             [0, 0 ,0.000]])
+        # self.lm_cov = np.array([[0.05**2, 0 ,0],
+        #                     [0, 0.05**2, 0],
+        #                     [0, 0 ,0.005**2]])
         self.lm_cov = np.array([[0.05**2, 0 ,0],
                             [0, 0.05**2, 0],
-                            [0, 0 ,0.005**2]])
+                            [0, 0 ,0.05**2]])
+        
+        
         
         self.filter = PEKFSLAM(self.xk_0, self.Pk_0)
+        self.last_encoder_time = rospy.Time.now()
 
         self.map = [] # contain [PoseCovStamped, PC2]
         self.map_flag = [] # flag for combining
@@ -75,6 +81,7 @@ class LocalizationNode:
         self.joint_state_pub = rospy.Publisher(joint_state_topic, JointState, queue_size=1)
         # ODOM PUBLISHER
         self.odom_pub = rospy.Publisher(odom_topic, Odometry, queue_size=1)
+        self.odom_pure_pub = rospy.Publisher("/odom_pure", Odometry, queue_size=1)
         self.combined_pc_pub = rospy.Publisher("/combined_pc", PointCloud2, queue_size=1)
         self.prediction_pc_pub = rospy.Publisher("/prediction_pc", PointCloud2, queue_size=1)
 
@@ -102,15 +109,15 @@ class LocalizationNode:
         rospy.Timer(rospy.Duration(0.01), self.odom_msg_pub)
         rospy.sleep(5)
         # Timer
-        self.initialize_map()
+        # self.initialize_map()
         rospy.sleep(1)
 
         if self.map_enable == "True":
             rospy.loginfo("Map is enabled")
         
             rospy.Timer(rospy.Duration(self.map_update_interval), self.main_loop)
-            rospy.Timer(rospy.Duration(0.5), self.publish_map)
-            rospy.Timer(rospy.Duration(0.5), self.visualize_states)
+            rospy.Timer(rospy.Duration(10), self.publish_map)
+            rospy.Timer(rospy.Duration(10), self.visualize_states)
         
 
 
@@ -130,6 +137,8 @@ class LocalizationNode:
             self.right_vel = data.velocity[1]
             self.right_vel_arrived = True
 
+            self.current_encoder_timestamp = data.header.stamp
+
         if data.name[0] == self.right_wheel_name:
             self.right_vel = data.velocity[0]
             self.right_vel_arrived = True
@@ -141,8 +150,11 @@ class LocalizationNode:
             self.right_vel_arrived = False
 
             uk, Qk, dt = self.dr.get_input(self.left_vel, self.right_vel)
+            dt = (self.current_encoder_timestamp - self.last_encoder_time).to_sec()
             self.filter.dt = dt
+            # rospy.logerr("dt:{}".format(self.filter.dt))
             xk_bar, Pk_bar = self.filter.prediction(uk, Qk)
+            self.last_encoder_time = self.current_encoder_timestamp
 
     def imu_callback(self, data):
         '''
@@ -152,7 +164,7 @@ class LocalizationNode:
         euler = tf.transformations.euler_from_quaternion(q)
         
         zk = np.array([wrap_angle(-euler[2])]).reshape(-1,1)
-        Rk = np.array([0.1]).reshape(-1,1)
+        Rk = np.array([0.2]).reshape(-1,1)
 
         self.filter.update_imu(zk,Rk)
 
@@ -299,12 +311,24 @@ class LocalizationNode:
 
         self.odom_pub.publish(odom)
 
+        # For pure ekf
+        odom_pure = Odometry()
+        odom_pure.header.stamp = self.current_timestamp 
+        odom_pure.header.frame_id = self.world_frame
+        odom_pure.child_frame_id = self.bf_frame
+
+        odom_pure.pose = self.get_robot_pose_cov(self.filter.xk_odom, self.filter.Pk_odom).pose
+
+        self.odom_pure_pub.publish(odom_pure)
+
         q = quaternion_from_euler(0, 0, float(self.filter.xk[-1, 0]))
         # tf.TransformBroadcaster().sendTransform((float(self.filter.xk[-3, 0]), float(self.filter.xk[-2, 0]), 0.0), q, rospy.Time.now(
         # ), odom.child_frame_id, odom.header.frame_id)
         tf_msg = TransformStamped()
         tf_msg.header.frame_id = self.world_frame
         tf_msg.header.stamp = self.current_timestamp
+        # tf_msg.header.stamp = rospy.Time.now()
+
         tf_msg.child_frame_id = self.bf_frame
 
         tf_msg.transform.translation.x = float(self.filter.xk[-3, 0])
@@ -353,48 +377,50 @@ class LocalizationNode:
         '''
         
         current_pc = self.current_pc
+        try:
+            if self.filter.need_augment():
+                xk_plus,Pk_plus = self.filter.augment_state() # update state
 
-        if self.filter.need_augment():
-            xk_plus,Pk_plus = self.filter.augment_state() # update state
+                current_pc = self.current_pc
+                self.map.append(current_pc) # update map
+                self.map_flag.append(False)
+                self.map_gt.append(self.gt)
 
-            current_pc = self.current_pc
-            self.map.append(current_pc) # update map
-            self.map_flag.append(False)
-            self.map_gt.append(self.gt)
-
-            new_state = xk_plus[-6:-3,0].reshape(-1,1)  
-            new_state_cov = Pk_plus[-6:-3,-6:-3]
-            
-            self.map_state.append(new_state)
-
-            # find overlapping scan 
-            overlaped_list = self.find_overlapping(xk_plus, new_state)
-
-            if len(self.map) != (self.filter.xk.shape[0]//3)-1:
-                rospy.logerr("state is unbalncaned xk:{}, map:{}".format((self.filter.xk.shape[0]//3)-1, len(self.map)))
-
-            # find laser matching tf for each overlapping scan
-            zlm = np.zeros((0,1))
-            Rlm = np.zeros((0,0))
-            hlm = np.zeros((0,1))
-            Plm = np.zeros((0,0))
-            for idx,i  in enumerate(overlaped_list):
-                hypo_state = xk_plus[i*3:i*3+3,0].reshape(-1,1)
-                target_pc = self.map[i]
+                new_state = xk_plus[-6:-3,0].reshape(-1,1)  
+                new_state_cov = Pk_plus[-6:-3,-6:-3]
                 
-                initial_guess_tf ,initial_guess, initial_guess_cov = self.filter.find_initial_guess(new_state,hypo_state, new_state_cov, Pk_plus[i*3:i*3+3,i:i+3])
-                _, scan_matching, scan_matching_cov = self.get_scan_matching(target_pc,current_pc,initial_guess_tf)
+                self.map_state.append(self.filter.xk_odom)
 
-                if self.filter.individual_compatable(scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):
-                    zlm = np.block([[zlm], [scan_matching]])
-                    Rlm = scipy.linalg.block_diag(Rlm, scan_matching_cov)
-                    hlm = np.block([[hlm], [initial_guess]])
-                    Plm = scipy.linalg.block_diag(Plm, initial_guess_cov)
-                    self.map_flag[i] = False
-                else:
-                    overlaped_list.pop(idx)
-            if len(overlaped_list) > 0:
-                self.filter.update_lm(zlm,Rlm,hlm,overlaped_list)
+                # find overlapping scan 
+                overlaped_list = self.find_overlapping(xk_plus, new_state)
+
+                if len(self.map) != (self.filter.xk.shape[0]//3)-1:
+                    rospy.logerr("state is unbalncaned xk:{}, map:{}".format((self.filter.xk.shape[0]//3)-1, len(self.map)))
+
+                # find laser matching tf for each overlapping scan
+                zlm = np.zeros((0,1))
+                Rlm = np.zeros((0,0))
+                hlm = np.zeros((0,1))
+                Plm = np.zeros((0,0))
+                for idx,i  in enumerate(overlaped_list):
+                    hypo_state = xk_plus[i*3:i*3+3,0].reshape(-1,1)
+                    target_pc = self.map[i]
+                    
+                    initial_guess_tf ,initial_guess, initial_guess_cov = self.filter.find_initial_guess(new_state,hypo_state, new_state_cov, Pk_plus[i*3:i*3+3,i:i+3])
+                    _, scan_matching, scan_matching_cov = self.get_scan_matching(target_pc,current_pc,initial_guess_tf)
+
+                    if self.filter.individual_compatable(scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):
+                        zlm = np.block([[zlm], [scan_matching]])
+                        Rlm = scipy.linalg.block_diag(Rlm, scan_matching_cov)
+                        hlm = np.block([[hlm], [initial_guess]])
+                        Plm = scipy.linalg.block_diag(Plm, initial_guess_cov)
+                        self.map_flag[i] = False
+                    else:
+                        overlaped_list.pop(idx)
+                if len(overlaped_list) > 0:
+                    self.filter.update_lm(zlm,Rlm,hlm,overlaped_list)
+        except:
+            ...
 
     def main_loop_gt(self,_):
         '''
@@ -412,7 +438,8 @@ class LocalizationNode:
             self.map_gt.append(self.gt)
             new_state = xk_plus[-6:-3,0].reshape(-1,1)  
             new_state_cov = Pk_plus[-6:-3,-6:-3]
-            
+            self.map_state.append(self.filter.xk_odom)
+
             # find overlapping scan 
             overlaped_list = self.find_overlapping(xk_plus, new_state)
             
@@ -472,7 +499,7 @@ class LocalizationNode:
         self.map_flag.append(False)
         self.map_gt.append(self.gt)      
         self.filter.augment_state()
-        self.map_state.append(self.filter.xk[-6:-3,0].reshape(-1,1))
+        self.map_state.append(self.filter.xk_odom)
 
 
         # self.combined_pc = self.transform_pc(current_pc, self.world_frame)

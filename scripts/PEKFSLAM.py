@@ -16,6 +16,11 @@ class PEKFSLAM:
         #robot pose and uncertainty
         self.xk = xk_0
         self.Pk = Pk_0
+
+        # prediction alone state
+        self.xk_odom = xk_0
+        self.Pk_odom = Pk_0
+
         self.dt = 0.01
 
         self.augment_threshold = 0.005
@@ -31,6 +36,7 @@ class PEKFSLAM:
         Pk = self.Pk[-3:,-3:].reshape(3,3)
         xk_bar, Pk_bar = pose_prediction(xk,Pk,uk,Qk,Wk,self.dt)
         
+        # rospy.logerr("xk diff:{}".format(self.xk[-3:,0] -xk_bar.reshape(3) ))
         # Predict only current position
         self.xk[-3:,0] = xk_bar.reshape(3)
 
@@ -42,6 +48,12 @@ class PEKFSLAM:
         self.Pk[:-3, -3:] = self.Pk[:-3,-3:] @ J1_o.T
         self.Pk[-3:, :-3] = J1_o @ self.Pk[-3:,:-3] 
 
+        # for pure ekf
+        xk_odom, Pk_odom  = pose_prediction(self.xk_odom,self.Pk_odom,uk,Qk,Wk,self.dt)
+        # rospy.logerr("pure diff:{}".format(self.xk_odom -xk_odom))
+        
+        self.xk_odom = xk_odom
+        self.Pk_odom = Pk_odom
         
         # rospy.logerr("xk:{} ".format(self.xk))
         # rospy.logerr("Pk:{} ".format(self.Pk))
@@ -74,7 +86,19 @@ class PEKFSLAM:
             self.xk = xk
             self.Pk = Pk
         else:
-            rospy.logerr("state is unbalncaned in imu update")
+            ...
+            # rospy.logerr("state is unbalncaned in imu update")
+            # self.xk[-3:,0] = xk[-3:,0]
+            # self.Pk = Pk
+
+        # for pure ekf
+        h = np.array([wrap_angle(self.xk_odom[-1,0])])
+        Hk = np.zeros((zk.shape[0],self.xk_odom.shape[0]))
+        Hk[0,-1] = 1
+        Vk = np.eye(zk.shape[0])
+        zk_h =  wrap_angle(zk-h)
+        self.xk_odom,self.Pk_odom = self.update(zk, Rk, self.xk_odom, self.Pk_odom, Hk, Vk, h, zk_h)
+
 
     def update_lm(self, zlm, Rlm, hlm, hypothesis):
         rospy.logwarn("Update Laser Matching!!!!")
@@ -121,8 +145,8 @@ class PEKFSLAM:
         '''
         Augment current pose as a new state and also add covariance
         '''
-        xk = self.xk.copy()
-        Pk = self.Pk.copy()
+        xk = self.xk
+        Pk = self.Pk
 
         xk_plus = np.block([[xk],[xk[-3:,0].reshape(-1,1)]])
 

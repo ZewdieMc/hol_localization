@@ -24,8 +24,8 @@ class DeadReckoning:
         self.Wr = Wr
 
         # noise in encoder's velocity
-        self.Qw = np.array([[50**2, 0],
-                            [0, 50**2]])
+        self.Qw = np.array([[20**2, 0],
+                            [0, 20**2]])
         
 
         self.last_time = rospy.Time.now()
@@ -35,7 +35,7 @@ class DeadReckoning:
 
     def get_input(self, left_vel, right_vel):
         # delta t, time difference between two consecutive odometry readings
-        self.dt = (rospy.Time.now() - self.last_time).to_sec()
+        dt = (rospy.Time.now() - self.last_time).to_sec()
         
         #update last time
         self.last_time = rospy.Time.now()
@@ -49,6 +49,6 @@ class DeadReckoning:
 
         Qk =(A @ self.Qw @ A.T ) 
    
-        return uk, Qk, self.dt
+        return uk, Qk, dt
 
     

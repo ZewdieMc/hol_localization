@@ -1,0 +1,15 @@
+<launch>
+        <param name="~frame_id" type="string" value="world_ned" />
+        <param name="use_sim_time" value="false" />
+
+        <node pkg="ho_localization" type="laser_to_pc_node.py" name="laserscan_to_pointcloud"/>
+        <node pkg="ho_localization" type="vel_adapter_node.py" name="steering_node" output="screen"/>
+        <node pkg="ho_localization" type="ndt_node" name="ndt_node" output="screen"/>
+        <node pkg="ho_localization" type="localization_node.py" name="odom_node" output="screen"/>
+        <!-- <node pkg="ho_localization" type="laser_matching_node.py" name="laser_matching_node" output="screen"/> -->
+        <node pkg="octomap_server" type="octomap_server_node" name="octomap" output="screen">
+                <remap to="/combined_pc" from="/cloud_in"/>
+        
+        </node>
+
+</launch>
