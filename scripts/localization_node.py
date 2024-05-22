@@ -5,6 +5,8 @@ from sensor_msgs.msg import JointState, Imu
 from  nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped, Transform
 import numpy as np
+import matplotlib.pyplot as plt
+import sensor_msgs.point_cloud2 as pc2
 from numpy import cos, sin
 import tf.msg
 from tf.transformations import quaternion_from_euler, euler_from_quaternion
@@ -22,8 +24,9 @@ from sensor_msgs import point_cloud2
 from visualization_msgs.msg import Marker, MarkerArray
 import scipy
 import rosparam
+from std_srvs.srv import EmptyRequest, Empty, EmptyResponse
 class LocalizationNode:
-    def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.235, Wr=0.035):
+    def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.23, Wr=0.03):
         self.map_enable = rospy.get_param("enable_map",default="True")
 
         self.scan_frame = "turtlebot/kobuki/rplidar"
@@ -48,9 +51,9 @@ class LocalizationNode:
         # self.lm_cov = np.array([[0.05**2, 0 ,0],
         #                     [0, 0.05**2, 0],
         #                     [0, 0 ,0.005**2]])
-        self.lm_cov = np.array([[0.05**2, 0 ,0],
-                            [0, 0.05**2, 0],
-                            [0, 0 ,0.05**2]])
+        self.lm_cov = np.array([[0.03**2, 0 ,0],
+                            [0, 0.03**2, 0],
+                            [0, 0 ,0.01**2]])
         
         
         
@@ -67,7 +70,14 @@ class LocalizationNode:
         self.gt = None
 
         self.map_update_interval = 4
-        self.overlap_threshold = 1
+        self.overlap_threshold = 1.4
+
+        #For plotting
+        self.PEKF_list = []
+        self.EKF_list = []
+        self.GT_list = []
+        self.map_predict_plot = None
+        self.map_plot = None
 
         # For initial guese calculation
         self.previous_pose = self.filter.xk[-3:] 
@@ -105,6 +115,8 @@ class LocalizationNode:
 
         self.tf_bc = tf2_ros.TransformBroadcaster()
 
+        self.plot_srv = rospy.Service('plot_pekf', Empty, self.handle_plot)
+
         rospy.sleep(5)
         rospy.Timer(rospy.Duration(0.01), self.odom_msg_pub)
         rospy.sleep(5)
@@ -116,9 +128,9 @@ class LocalizationNode:
             rospy.loginfo("Map is enabled")
         
             rospy.Timer(rospy.Duration(self.map_update_interval), self.main_loop)
-            rospy.Timer(rospy.Duration(10), self.publish_map)
+            rospy.Timer(rospy.Duration(1), self.publish_map)
             rospy.Timer(rospy.Duration(10), self.visualize_states)
-        
+            rospy.Timer(rospy.Duration(0.5), self.update_plot)
 
 
     ##################################################################
@@ -134,8 +146,8 @@ class LocalizationNode:
         if data.name[0] == self.left_wheel_name:
             self.left_vel = data.velocity[0]
             self.left_vel_arrived = True
-            self.right_vel = data.velocity[1]
-            self.right_vel_arrived = True
+            # self.right_vel = data.velocity[1]
+            # self.right_vel_arrived = True
 
             self.current_encoder_timestamp = data.header.stamp
 
@@ -155,6 +167,8 @@ class LocalizationNode:
             # rospy.logerr("dt:{}".format(self.filter.dt))
             xk_bar, Pk_bar = self.filter.prediction(uk, Qk)
             self.last_encoder_time = self.current_encoder_timestamp
+            
+            
 
     def imu_callback(self, data):
         '''
@@ -163,7 +177,7 @@ class LocalizationNode:
         q = [data.orientation.x,data.orientation.y,data.orientation.z,data.orientation.w]
         euler = tf.transformations.euler_from_quaternion(q)
         
-        zk = np.array([wrap_angle(-euler[2])]).reshape(-1,1)
+        zk = np.array([wrap_angle(euler[2])]).reshape(-1,1)
         Rk = np.array([0.2]).reshape(-1,1)
 
         self.filter.update_imu(zk,Rk)
@@ -294,6 +308,88 @@ class LocalizationNode:
         gt_cov = self.lm_cov
         return gt_tf, gt , gt_cov
         
+    def clear_map(self):
+        rospy.logwarn("Calling claer map")
+        rospy.wait_for_service('octomap/reset')
+        try:
+            reset_map = rospy.ServiceProxy('octomap/reset', Empty)
+            req = EmptyRequest()
+            
+            resp = reset_map(req)
+            
+        except rospy.ServiceException as e:
+            print(f"Service call failed: {e}")
+
+    def handle_plot(self,req):
+        plt.figure(figsize=(8,8))
+        colors = ['b', 'g', 'r']  # Define a color for each path
+        # for i in range(len(self.PEKF_list)):
+        #     x = self.PEKF_list[i][0,0]
+        #     y = self.PEKF_list[i][1,0]
+        #     plt.plot(x, y, marker='o', color='r', label="PEKFSLAM (encoder + IMU + NDT)")
+
+        #     x = self.EKF_list[i][0,0]
+        #     y = self.EKF_list[i][1,0]
+        #     plt.plot(x, y, marker='o', color='b', label="PEKF (encoder + IMU)")
+
+        #     if self.gt is not None:
+        #         x = self.GT_list[i][0,0]
+        #         y = self.GT_list[i][1,0]
+        #         plt.plot(x, y, marker='o', color='g', label="Ground Truth")
+        PEKF_np = np.array(self.PEKF_list).reshape(len(self.PEKF_list),2)
+        EKF_np = np.array(self.EKF_list).reshape(len(self.EKF_list),2)
+        GT_np = np.array(self.GT_list).reshape(len(self.GT_list),2)
+
+        plt.plot(PEKF_np[:,1], PEKF_np[:,0], color='r', linewidth=1.5,label="PEKFSLAM (encoder + IMU + NDT)")
+        plt.plot(EKF_np[:,1], EKF_np[:,0], color='b',linewidth=1.5,label="EKF (encoder + IMU)")
+        plt.plot(GT_np[:,1], GT_np[:,0], color='g',linestyle='dashed',linewidth=1.2,label="Ground Truth")
+
+        plt.xlabel('Y')
+        plt.ylabel('X')
+        plt.axis([-5.5,5.5,-3,7.2])
+        plt.title('Comparison of Paths')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/comparison_of_paths_{}.png".format(rospy.Time.now()))
+        plt.close()  # Close the figure to free memory
+
+        np.save('/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/PEKF_PATH.npy', PEKF_np)
+        np.save('/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/EKF_PATH.npy', EKF_np)
+        np.save('/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/GT_PATH.npy', GT_np)
+        
+        # Plot map 
+        plt.figure(figsize=(8, 8))
+        plt.xlabel('Y')
+        plt.ylabel('X')
+        plt.axis([-5.5,5.5,-3,7.2])
+        plt.title('Map from PEKFSLAM (encoder + IMU + NDT)')
+        plt.legend()
+        plt.grid(True)
+        
+        map_points = pc2.read_points(self.map_plot, field_names=("x", "y"), skip_nans=True)
+        for point in map_points:
+            plt.scatter(point[1], point[0], c='r', marker='.',s=0.3)
+        plt.savefig("/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/comparison_of_maps_1_{}.png".format(rospy.Time.now()))
+        plt.close()  # Close the figure to free memory
+
+        plt.figure(figsize=(8, 8))
+        plt.xlabel('Y')
+        plt.ylabel('X')
+        plt.axis([-5.5,5.5,-3,7.2])
+        plt.title('Map from EKF (encoder + IMU)')
+        plt.legend()
+        plt.grid(True)
+        map_predict_points = pc2.read_points(self.map_predict_plot, field_names=("x", "y"), skip_nans=True)
+        for point in map_predict_points:
+            plt.scatter(point[1], point[0], c='b', marker='.',s=0.3)
+        plt.savefig("/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/comparison_of_maps_2_{}.png".format(rospy.Time.now()))
+        plt.close()  # Close the figure to free memory
+        
+        
+        
+
+    
+        return EmptyResponse()
 
     ##################################################################
     #### Timer Functions
@@ -326,8 +422,8 @@ class LocalizationNode:
         # ), odom.child_frame_id, odom.header.frame_id)
         tf_msg = TransformStamped()
         tf_msg.header.frame_id = self.world_frame
-        tf_msg.header.stamp = self.current_timestamp
-        # tf_msg.header.stamp = rospy.Time.now()
+        # tf_msg.header.stamp = self.current_timestamp
+        tf_msg.header.stamp = rospy.Time.now()
 
         tf_msg.child_frame_id = self.bf_frame
 
@@ -339,6 +435,9 @@ class LocalizationNode:
         tf_msg.transform.rotation.z = q[2]
         tf_msg.transform.rotation.w = q[3]
         self.tf_bc.sendTransform(tf_msg)
+
+        if self.combined_pc is not None:
+            self.combined_pc_pub.publish(self.combined_pc)
     
     def odom_msg_gt_pub(self,_):
         '''
@@ -512,7 +611,7 @@ class LocalizationNode:
             if len(self.map) > 0 and self.filter.xk.shape[0] > 3:
                 xk = self.filter.xk.copy()
                 map = self.map
-                self.combined_pc = self.transform_pc_from_pose(map[0],xk[0:3,0].reshape(-1,1) )
+                combined_pc = self.transform_pc_from_pose(map[0],xk[0:3,0].reshape(-1,1) )
                 self.prediction_pc = self.transform_pc_from_pose(map[0],self.map_state[0]) 
 
                 for i in range(1,(xk.shape[0]//3)-1):
@@ -526,9 +625,12 @@ class LocalizationNode:
 
                     vp = xk[i*3:i*3+3,0].reshape(-1,1)
                     new_pc = self.transform_pc_from_pose(map[i],vp )
-                    self.combined_pc = self.merge_pointclouds(self.combined_pc, new_pc)
-                
-                self.combined_pc_pub.publish(self.combined_pc)
+                    combined_pc = self.merge_pointclouds(combined_pc, new_pc)
+                self.combined_pc = combined_pc
+                self.map_plot = combined_pc
+                self.map_predict_plot = self.prediction_pc
+                self.clear_map()
+                # self.combined_pc_pub.publish(self.combined_pc)
                 self.prediction_pc_pub.publish(self.prediction_pc)
         except Exception as e:
             rospy.logerr(e)
@@ -799,11 +901,21 @@ class LocalizationNode:
         initial_guese_transform.rotation.w = q[3]
 
         return initial_guese_transform
+    
+    def update_plot(self,_):
+        # Update plotting parameters
+        try:
+            self.PEKF_list.append(self.filter.xk[-3:-1,0].reshape(-1,1))
+            self.EKF_list.append(self.filter.xk_odom[:2,0].reshape(-1,1))
+            if self.gt is not None:
+                self.GT_list.append(self.gt[:2,0].reshape(-1,1))
+        except:
+            ...
 
 if __name__ == '__main__':
 
     rospy.init_node('localization')
-    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu_data","/cloud_in")
+    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu","/cloud_in")
     rospy.loginfo("Localization node started")
 
     rospy.spin()

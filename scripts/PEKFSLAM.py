@@ -22,6 +22,8 @@ class PEKFSLAM:
         self.Pk_odom = Pk_0
 
         self.dt = 0.01
+        self.augmenting = False
+        self.updating_lm = False
 
         self.augment_threshold = 0.005
 
@@ -61,11 +63,52 @@ class PEKFSLAM:
 
     
     def update(self, zk, Rk, xk_bar, Pk_bar, Hk, Vk, h,zk_h):
+        try:
+            
+            kk = Pk_bar @ Hk.T @ np.linalg.inv(Hk @ Pk_bar @ Hk.T + Vk @ Rk @ Vk.T)
+            xk = xk_bar + kk @ zk_h
+            self.xk = xk
+            I = np.eye(xk.shape[0])
+            Pk = (I - kk @ Hk) @ Pk_bar
+            self.Pk = Pk
+            xk[-1,0] = wrap_angle(xk[-1,0])
+        except:
+            # rospy.logerr("state is unbalanced")
+            return self.xk, self.Pk
+
+        return xk, Pk
+    
+    def update_for_imu(self, zk, Rk, xk_bar, Pk_bar, Hk, Vk, h,zk_h):
+        try:
+            if self.augmenting or self.xk.shape[0] != xk_bar.shape[0] or self.updating_lm:
+                # rospy.logerr("update while augmenting -- skip")
+                return self.xk, self.Pk
+            # Pk_bar = self.Pk
+            kk = Pk_bar @ Hk.T @ np.linalg.inv(Hk @ Pk_bar @ Hk.T + Vk @ Rk @ Vk.T)
+            # xk_bar = self.xk
+            xk = xk_bar + kk @ zk_h
+            if self.augmenting or self.xk.shape[0] != xk_bar.shape[0] or self.updating_lm:
+                # rospy.logerr("update while augmenting -- skip")
+                return self.xk, self.Pk
+            self.xk = xk
+            I = np.eye(xk.shape[0])
+            Pk = (I - kk @ Hk) @ Pk_bar
+            if self.augmenting or self.xk.shape[0] != xk_bar.shape[0] or self.updating_lm:
+                # rospy.logerr("update while augmenting -- skip")
+                return self.xk, self.Pk
+            self.Pk = Pk
+            xk[-1,0] = wrap_angle(xk[-1,0])
+        except:
+            # rospy.logerr("state is unbalanced")
+            return self.xk, self.Pk
+
+        return xk, Pk
+    
+    def update_pure(self, zk, Rk, xk_bar, Pk_bar, Hk, Vk, h,zk_h):
         kk = Pk_bar @ Hk.T @ np.linalg.inv(Hk @ Pk_bar @ Hk.T + Vk @ Rk @ Vk.T)
-        xk = xk_bar + kk @ zk_h
+        xk = xk_bar + kk @ zk_h       
         I = np.eye(xk.shape[0])
         Pk = (I - kk @ Hk) @ Pk_bar
-
         xk[-1,0] = wrap_angle(xk[-1,0])
 
         return xk, Pk
@@ -75,33 +118,40 @@ class PEKFSLAM:
 #######################################
 
     def update_imu(self, zk, Rk):
-        h = np.array([wrap_angle(self.xk[-1,0])])
-        Hk = np.zeros((zk.shape[0],self.xk.shape[0]))
-        Hk[0,-1] = 1
-        Vk = np.eye(zk.shape[0])
-        zk_h =  wrap_angle(zk-h)
-        xk,Pk = self.update(zk, Rk, self.xk, self.Pk, Hk, Vk, h, zk_h)
+        if not self.updating_lm and not self.augmenting:
+            # rospy.logerr("update_imu")
+            h = np.array([wrap_angle(self.xk[-1,0])])
+            Hk = np.zeros((zk.shape[0],self.xk.shape[0]))
+            Hk[0,-1] = 1
+            Vk = np.eye(zk.shape[0])
+            zk_h =  wrap_angle(zk-h)
+            # time = rospy.Time.now()
+            
+            xk,Pk = self.update_for_imu(zk, Rk, self.xk, self.Pk, Hk, Vk, h, zk_h)
+            # # rospy.logerr("imu time used:{}".format((rospy.Time.now()-time).to_sec()))
+            if self.xk.shape[0] == xk.shape[0]: # state unbalanced bug
+                # self.xk = xk
+                # self.Pk = Pk
+                ...
+            else:
+                ...
+                # rospy.logerr("state is unbalncaned in imu update")
+                # self.xk[-3:,0] = xk[-3:,0]
+                # self.Pk = Pk
 
-        if self.xk.shape[0] == xk.shape[0]: # state unbalanced bug
-            self.xk = xk
-            self.Pk = Pk
-        else:
-            ...
-            # rospy.logerr("state is unbalncaned in imu update")
-            # self.xk[-3:,0] = xk[-3:,0]
-            # self.Pk = Pk
-
-        # for pure ekf
-        h = np.array([wrap_angle(self.xk_odom[-1,0])])
-        Hk = np.zeros((zk.shape[0],self.xk_odom.shape[0]))
-        Hk[0,-1] = 1
-        Vk = np.eye(zk.shape[0])
-        zk_h =  wrap_angle(zk-h)
-        self.xk_odom,self.Pk_odom = self.update(zk, Rk, self.xk_odom, self.Pk_odom, Hk, Vk, h, zk_h)
+            # for pure ekf
+            h = np.array([wrap_angle(self.xk_odom[-1,0])])
+            Hk = np.zeros((zk.shape[0],self.xk_odom.shape[0]))
+            Hk[0,-1] = 1
+            Vk = np.eye(zk.shape[0])
+            zk_h =  wrap_angle(zk-h)
+            self.xk_odom,self.Pk_odom = self.update_pure(zk, Rk, self.xk_odom, self.Pk_odom, Hk, Vk, h, zk_h)
+            # rospy.logerr("---------------Update IMU END-------------")
 
 
     def update_lm(self, zlm, Rlm, hlm, hypothesis):
-        rospy.logwarn("Update Laser Matching!!!!")
+        # rospy.logerr("Update Laser Matching!!!!")
+        self.updating_lm = True
         Hk = np.zeros((zlm.shape[0], self.xk.shape[0]))
         Vk = np.eye(zlm.shape[0])
 
@@ -127,17 +177,17 @@ class PEKFSLAM:
             if i+1 % 3 == 0:
                 zk_h[i,0] = wrap_angle(zk_h[i])
         
-        # rospy.logerr("zlm: {}".format(zlm))
-        # rospy.logerr("hlm: {}".format(hlm))
-        # rospy.logerr("zk_h: {}".format(zk_h))
+        # # rospy.logerr("zlm: {}".format(zlm))
+        # # rospy.logerr("hlm: {}".format(hlm))
+        # # rospy.logerr("zk_h: {}".format(zk_h))
 
 
         xk,Pk = self.update(zlm, Rlm, self.xk, self.Pk, Hk, Vk, hlm, zk_h)
-        # rospy.logerr("state change: {}".format(xk - self.xk))
-        self.xk = xk
-        self.Pk = Pk
-
-
+        # # rospy.logerr("state change: {}".format(xk - self.xk))
+        # self.xk = xk
+        # self.Pk = Pk
+        self.updating_lm = False
+        # rospy.logerr("---------------Update Laser Matching END-------------")
 #######################################
 #######  State Augment Related
 #######################################
@@ -145,6 +195,8 @@ class PEKFSLAM:
         '''
         Augment current pose as a new state and also add covariance
         '''
+        rospy.logwarn("--------------Augment start--------")
+        self.augmenting = True
         xk = self.xk
         Pk = self.Pk
 
@@ -160,6 +212,8 @@ class PEKFSLAM:
 
         self.xk = xk_plus
         self.Pk = Pk_plus
+        self.augmenting = False
+        rospy.logwarn("--------------Augment END--------")
         return xk_plus, Pk_plus
 
 

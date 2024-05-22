@@ -82,4 +82,5 @@ def pose_prediction(xk_1,Pk_1,uk,Qk, Wk = 0,dt =1):
     xk_bar = oplus(xk_1, uk*dt )
     Pk_bar = (J1_o @ Pk_1 @ J1_o.T) + (J2_o @ Qk @ J2_o.T ) + Wk
 
+
     return xk_bar, Pk_bar
