@@ -26,8 +26,9 @@ import scipy
 import rosparam
 from std_srvs.srv import EmptyRequest, Empty, EmptyResponse
 class LocalizationNode:
-    def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.23, Wr=0.03):
+    def __init__(self, joint_state_topic, odom_topic,imu_topic,pc_topic, Wb=0.235, Wr=0.035):
         self.map_enable = rospy.get_param("enable_map",default="True")
+        self.simulation = rospy.get_param("simulation",default="True")
 
         self.scan_frame = "turtlebot/kobuki/rplidar"
         self.bf_frame = "turtlebot/kobuki/base_footprint"
@@ -42,18 +43,18 @@ class LocalizationNode:
         self.right_vel_arrived = False
         
         # Filter Module
-        # self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
-        self.xk_0 = np.array([0.0, 0.0,0.0]).reshape(-1,1)
+        self.xk_0 = np.array([3.0, -0.78, np.pi/2]).reshape(-1,1)
+        # self.xk_0 = np.array([0.0, 0.0,0.0]).reshape(-1,1)
 
         self.Pk_0 = np.array([[0.000, 0 ,0],
                             [0, 0.0000, 0],
                             [0, 0 ,0.000]])
         # self.lm_cov = np.array([[0.05**2, 0 ,0],
         #                     [0, 0.05**2, 0],
-        #                     [0, 0 ,0.005**2]])
-        self.lm_cov = np.array([[0.03**2, 0 ,0],
-                            [0, 0.03**2, 0],
-                            [0, 0 ,0.01**2]])
+        #                     [0, 0 ,0.05**2]])
+        self.lm_cov = np.array([[0.01**2, 0 ,0],
+                            [0, 0.01**2, 0],
+                            [0, 0 ,0.005**2]])
         
         
         
@@ -70,7 +71,7 @@ class LocalizationNode:
         self.gt = None
 
         self.map_update_interval = 4
-        self.overlap_threshold = 1.4
+        self.overlap_threshold = 1.5
 
         #For plotting
         self.PEKF_list = []
@@ -104,6 +105,10 @@ class LocalizationNode:
         self.joint_state_sub = rospy.Subscriber(joint_state_topic, JointState, self.joint_state_callback)
         self.gt_sub = rospy.Subscriber("/turtlebot/kobuki/ground_truth", Odometry, self.gt_callback)
         # IMU SUBSCRIBER
+        if self.simulation == "True":
+             imu_topic = "/turtlebot/kobuki/sensors/imu"
+        else:
+             imu_topic = "/turtlebot/kobuki/sensors/imu_data"
         self.imu_sub = rospy.Subscriber(imu_topic, Imu, self.imu_callback)
 
 
@@ -121,7 +126,6 @@ class LocalizationNode:
         rospy.Timer(rospy.Duration(0.01), self.odom_msg_pub)
         rospy.sleep(5)
         # Timer
-        # self.initialize_map()
         rospy.sleep(1)
 
         if self.map_enable == "True":
@@ -129,7 +133,9 @@ class LocalizationNode:
         
             rospy.Timer(rospy.Duration(self.map_update_interval), self.main_loop)
             rospy.Timer(rospy.Duration(1), self.publish_map)
-            rospy.Timer(rospy.Duration(10), self.visualize_states)
+            rospy.Timer(rospy.Duration(2), self.visualize_states)
+            self.initialize_map()
+
             rospy.Timer(rospy.Duration(0.5), self.update_plot)
 
 
@@ -146,8 +152,9 @@ class LocalizationNode:
         if data.name[0] == self.left_wheel_name:
             self.left_vel = data.velocity[0]
             self.left_vel_arrived = True
-            # self.right_vel = data.velocity[1]
-            # self.right_vel_arrived = True
+            if not self.simulation == "True":
+                self.right_vel = data.velocity[1]
+                self.right_vel_arrived = True
 
             self.current_encoder_timestamp = data.header.stamp
 
@@ -268,7 +275,7 @@ class LocalizationNode:
             req.target = target_pc
             req.current = current_pc
             resp = get_matching_tf(req)
-            # rospy.logwarn("matching: {}".format(resp.transform))
+            rospy.logwarn("matching: {}".format(resp.transform))
             
             dx = resp.transform.translation.x
             dy = resp.transform.translation.y
@@ -278,6 +285,7 @@ class LocalizationNode:
 
             lm_matching_cov = self.lm_cov
             
+            rospy.loginfo("ndt: {}".format(lm_matching))
 
             return resp.transform, lm_matching, lm_matching_cov
         except rospy.ServiceException as e:
@@ -309,7 +317,7 @@ class LocalizationNode:
         return gt_tf, gt , gt_cov
         
     def clear_map(self):
-        rospy.logwarn("Calling claer map")
+        # rospy.logwarn("Calling claer map")
         rospy.wait_for_service('octomap/reset')
         try:
             reset_map = rospy.ServiceProxy('octomap/reset', Empty)
@@ -358,32 +366,32 @@ class LocalizationNode:
         np.save('/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/GT_PATH.npy', GT_np)
         
         # Plot map 
-        plt.figure(figsize=(8, 8))
-        plt.xlabel('Y')
-        plt.ylabel('X')
-        plt.axis([-5.5,5.5,-3,7.2])
-        plt.title('Map from PEKFSLAM (encoder + IMU + NDT)')
-        plt.legend()
-        plt.grid(True)
+        # plt.figure(figsize=(8, 8))
+        # plt.xlabel('Y')
+        # plt.ylabel('X')
+        # plt.axis([-5.5,5.5,-3,7.2])
+        # plt.title('Map from PEKFSLAM (encoder + IMU + NDT)')
+        # plt.legend()
+        # plt.grid(True)
         
-        map_points = pc2.read_points(self.map_plot, field_names=("x", "y"), skip_nans=True)
-        for point in map_points:
-            plt.scatter(point[1], point[0], c='r', marker='.',s=0.3)
-        plt.savefig("/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/comparison_of_maps_1_{}.png".format(rospy.Time.now()))
-        plt.close()  # Close the figure to free memory
+        # map_points = pc2.read_points(self.map_plot, field_names=("x", "y"), skip_nans=True)
+        # for point in map_points:
+        #     plt.scatter(point[1], point[0], c='r', marker='.',s=0.3)
+        # plt.savefig("/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/comparison_of_maps_1_{}.png".format(rospy.Time.now()))
+        # plt.close()  # Close the figure to free memory
 
-        plt.figure(figsize=(8, 8))
-        plt.xlabel('Y')
-        plt.ylabel('X')
-        plt.axis([-5.5,5.5,-3,7.2])
-        plt.title('Map from EKF (encoder + IMU)')
-        plt.legend()
-        plt.grid(True)
-        map_predict_points = pc2.read_points(self.map_predict_plot, field_names=("x", "y"), skip_nans=True)
-        for point in map_predict_points:
-            plt.scatter(point[1], point[0], c='b', marker='.',s=0.3)
-        plt.savefig("/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/comparison_of_maps_2_{}.png".format(rospy.Time.now()))
-        plt.close()  # Close the figure to free memory
+        # plt.figure(figsize=(8, 8))
+        # plt.xlabel('Y')
+        # plt.ylabel('X')
+        # plt.axis([-5.5,5.5,-3,7.2])
+        # plt.title('Map from EKF (encoder + IMU)')
+        # plt.legend()
+        # plt.grid(True)
+        # map_predict_points = pc2.read_points(self.map_predict_plot, field_names=("x", "y"), skip_nans=True)
+        # for point in map_predict_points:
+        #     plt.scatter(point[1], point[0], c='b', marker='.',s=0.3)
+        # plt.savefig("/home/tanakrit-ubuntu/project_ws/src/ho_localization/plots/comparison_of_maps_2_{}.png".format(rospy.Time.now()))
+        # plt.close()  # Close the figure to free memory
         
         
         
@@ -422,8 +430,9 @@ class LocalizationNode:
         # ), odom.child_frame_id, odom.header.frame_id)
         tf_msg = TransformStamped()
         tf_msg.header.frame_id = self.world_frame
-        # tf_msg.header.stamp = self.current_timestamp
-        tf_msg.header.stamp = rospy.Time.now()
+        tf_msg.header.stamp = self.current_timestamp
+        if self.simulation == "True":
+            tf_msg.header.stamp = rospy.Time.now()
 
         tf_msg.child_frame_id = self.bf_frame
 
@@ -476,50 +485,50 @@ class LocalizationNode:
         '''
         
         current_pc = self.current_pc
-        try:
-            if self.filter.need_augment():
-                xk_plus,Pk_plus = self.filter.augment_state() # update state
+        
+        if self.filter.need_augment():
+            # rospy.logerr("Need augemnt")
+            xk_plus,Pk_plus = self.filter.augment_state() # update state
 
-                current_pc = self.current_pc
-                self.map.append(current_pc) # update map
-                self.map_flag.append(False)
-                self.map_gt.append(self.gt)
+            current_pc = self.current_pc
+            self.map.append(current_pc) # update map
+            self.map_flag.append(False)
+            self.map_gt.append(self.gt)
 
-                new_state = xk_plus[-6:-3,0].reshape(-1,1)  
-                new_state_cov = Pk_plus[-6:-3,-6:-3]
+            new_state = xk_plus[-6:-3,0].reshape(-1,1)  
+            new_state_cov = Pk_plus[-6:-3,-6:-3]
+            
+            self.map_state.append(self.filter.xk_odom)
+
+            # find overlapping scan 
+            overlaped_list = self.find_overlapping(xk_plus, new_state)
+
+            if len(self.map) != (self.filter.xk.shape[0]//3)-1:
+                rospy.logerr("state is unbalncaned xk:{}, map:{}".format((self.filter.xk.shape[0]//3)-1, len(self.map)))
+
+            # find laser matching tf for each overlapping scan
+            zlm = np.zeros((0,1))
+            Rlm = np.zeros((0,0))
+            hlm = np.zeros((0,1))
+            Plm = np.zeros((0,0))
+            for idx,i  in enumerate(overlaped_list):
+                hypo_state = xk_plus[i*3:i*3+3,0].reshape(-1,1)
+                target_pc = self.map[i]
                 
-                self.map_state.append(self.filter.xk_odom)
+                initial_guess_tf ,initial_guess, initial_guess_cov = self.filter.find_initial_guess(new_state,hypo_state, new_state_cov, Pk_plus[i*3:i*3+3,i:i+3])
+                _, scan_matching, scan_matching_cov = self.get_scan_matching(target_pc,current_pc,initial_guess_tf)
 
-                # find overlapping scan 
-                overlaped_list = self.find_overlapping(xk_plus, new_state)
-
-                if len(self.map) != (self.filter.xk.shape[0]//3)-1:
-                    rospy.logerr("state is unbalncaned xk:{}, map:{}".format((self.filter.xk.shape[0]//3)-1, len(self.map)))
-
-                # find laser matching tf for each overlapping scan
-                zlm = np.zeros((0,1))
-                Rlm = np.zeros((0,0))
-                hlm = np.zeros((0,1))
-                Plm = np.zeros((0,0))
-                for idx,i  in enumerate(overlaped_list):
-                    hypo_state = xk_plus[i*3:i*3+3,0].reshape(-1,1)
-                    target_pc = self.map[i]
-                    
-                    initial_guess_tf ,initial_guess, initial_guess_cov = self.filter.find_initial_guess(new_state,hypo_state, new_state_cov, Pk_plus[i*3:i*3+3,i:i+3])
-                    _, scan_matching, scan_matching_cov = self.get_scan_matching(target_pc,current_pc,initial_guess_tf)
-
-                    if self.filter.individual_compatable(scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):
-                        zlm = np.block([[zlm], [scan_matching]])
-                        Rlm = scipy.linalg.block_diag(Rlm, scan_matching_cov)
-                        hlm = np.block([[hlm], [initial_guess]])
-                        Plm = scipy.linalg.block_diag(Plm, initial_guess_cov)
-                        self.map_flag[i] = False
-                    else:
-                        overlaped_list.pop(idx)
-                if len(overlaped_list) > 0:
-                    self.filter.update_lm(zlm,Rlm,hlm,overlaped_list)
-        except:
-            ...
+                if self.filter.individual_compatable(scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):
+                    zlm = np.block([[zlm], [scan_matching]])
+                    Rlm = scipy.linalg.block_diag(Rlm, scan_matching_cov)
+                    hlm = np.block([[hlm], [initial_guess]])
+                    Plm = scipy.linalg.block_diag(Plm, initial_guess_cov)
+                    self.map_flag[i] = False
+                else:
+                    overlaped_list.pop(idx)
+            if len(overlaped_list) > 0:
+                self.filter.update_lm(zlm,Rlm,hlm,overlaped_list)
+        
 
     def main_loop_gt(self,_):
         '''
@@ -601,7 +610,7 @@ class LocalizationNode:
         self.map_state.append(self.filter.xk_odom)
 
 
-        # self.combined_pc = self.transform_pc(current_pc, self.world_frame)
+        self.combined_pc = self.transform_pc(current_pc, self.world_frame)
     
     ##################################################################
     #### Visualization functions
@@ -688,14 +697,14 @@ class LocalizationNode:
         state_marker.pose.orientation.y = q[1]
         state_marker.pose.orientation.z = q[2]
         state_marker.pose.orientation.w = q[3]
-        state_marker.scale.x = 0.5
-        state_marker.scale.y = 0.05
-        state_marker.scale.z = 0.05
+        state_marker.scale.x = 0.3
+        state_marker.scale.y = 0.03
+        state_marker.scale.z = 0.03
         r,g,b = self.scale_rgb_by_index(idx)
         state_marker.color.a = 1.0
-        state_marker.color.r = r
-        state_marker.color.g = g
-        state_marker.color.b = b
+        state_marker.color.r = 1.0
+        state_marker.color.g = 0.0
+        state_marker.color.b = 0.0
 
         return state_marker
 
@@ -732,9 +741,9 @@ class LocalizationNode:
         cov_marker.scale.y = y_axis_length * 2 
         cov_marker.scale.z = 0.01
         r,g,b = self.scale_rgb_by_index(idx)
-        cov_marker.color.a = 1.0
-        cov_marker.color.r = r
-        cov_marker.color.g = g
+        cov_marker.color.a = 0.7
+        cov_marker.color.r = 1
+        cov_marker.color.g = 1
         cov_marker.color.b = b
 
         return cov_marker
@@ -915,7 +924,7 @@ class LocalizationNode:
 if __name__ == '__main__':
 
     rospy.init_node('localization')
-    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu","/cloud_in")
+    robot = LocalizationNode("/turtlebot/joint_states", "/odom","/turtlebot/kobuki/sensors/imu_data","/cloud_in")
     rospy.loginfo("Localization node started")
 
     rospy.spin()

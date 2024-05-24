@@ -260,6 +260,8 @@ class PEKFSLAM:
         initial_guess_transform.rotation.z = q[2]
         initial_guess_transform.rotation.w = q[3]
 
+        print("Initial guess: {}".format(initial_guess))
+
         return initial_guess_transform, initial_guess, initial_guess_cov
     
     def individual_compatable(self,scan_matching,initial_guess,scan_matching_cov,initial_guess_cov):

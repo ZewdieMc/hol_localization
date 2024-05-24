@@ -54,7 +54,7 @@ int registeration ()
 
   // Setting scale dependent NDT parameters
   // Setting minimum transformation difference for termination condition.
-  ndt.setTransformationEpsilon (0.00001);
+  ndt.setTransformationEpsilon (0.000001);
   // Setting maximum step size for More-Thuente line search.
   ndt.setStepSize (0.03); //0.1
   //Setting Resolution of NDT grid structure (VoxelGridCovariance).

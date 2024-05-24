@@ -1,4 +1,5 @@
 <launch>
+        <param name="simulation" type="string" value="True" />
         <include file="$(find turtlebot_simulation)/launch/turtlebot_basic.launch" /> 
         <!-- <node pkg="ho_localization" type="odometry_node.py" name="dead_reckoning" output="screen"/> -->
         <node pkg="ho_localization" type="laser_to_pc_node.py" name="laserscan_to_pointcloud"/>
